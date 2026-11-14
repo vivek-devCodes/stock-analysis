@@ -1,0 +1,34 @@
+# Calls the AI Analyst's intraday scan every 30 minutes during NSE market hours.
+# Vercel's free (Hobby) plan only allows two once-a-day cron jobs, so this free GitHub schedule
+# covers intraday. Set two repository secrets (Settings → Secrets and variables → Actions):
+#   APEX_APP_URL     e.g. https://your-app.vercel.app
+#   APEX_CRON_SECRET the same value as CRON_SECRET in Vercel
+# Without them, the job exits without doing anything.
+# Note: GitHub may start scheduled runs a few minutes late at busy times.
+name: Agent intraday scan
+
+on:
+  schedule:
+    # 04:00–09:30 UTC = 09:30–15:00 IST, Monday–Friday
+    - cron: "0,30 4-9 * * 1-5"
+  workflow_dispatch: {}
+
+permissions: {}
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Call intraday scan
+        env:
+          APP_URL: ${{ secrets.APEX_APP_URL }}
+          CRON_SECRET: ${{ secrets.APEX_CRON_SECRET }}
+        run: |
+          if [ -z "$APP_URL" ] || [ -z "$CRON_SECRET" ]; then
+            echo "APEX_APP_URL / APEX_CRON_SECRET not set — skipping."
+            exit 0
+          fi
+          curl --fail-with-body --silent --show-error --max-time 320 \
+            -H "Authorization: Bearer $CRON_SECRET" \
+            "$APP_URL/api/cron/agent-scan?session=intraday"

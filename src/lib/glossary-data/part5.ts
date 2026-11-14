@@ -219,9 +219,9 @@ export const PART5: GlossarySection[] = [
       mp("P1 · Price Action", "Support, Resistance, Breakout", "Partly — pivot support/resistance, opening-range breakout, PDH/PDL, CPR"),
       mp("P1 · Corporate Disclosures", "Results, Announcements, Deals", "Partly — market news headlines; no exchange filings feed yet"),
       mp("P2 · Advanced Technical", "Ichimoku, CCI, ADX, CMF, OBV", "Partly — ADX/DMI implemented; others not yet"),
-      mp("P2 · Portfolio Risk", "Sharpe, Sortino, VaR, Drawdown", "Not yet for portfolios; backtests report hit rate, profit factor and expectancy"),
+      mp("P2 · Portfolio Risk", "Sharpe, Sortino, VaR, Drawdown", "Partly — AI Analyst risk agent does position sizing, max loss and liquidity/volatility checks per trade; no portfolio-level VaR/drawdown yet"),
       mp("P2 · Quantitative Models", "Regression, GARCH, Monte Carlo", "Partly — walk-forward out-of-sample backtest; no GARCH/Monte Carlo"),
-      mp("P3 · AI Research", "News sentiment, financial anomaly detection, multi-agent reasoning", "Partly — keyword news sentiment and the Gemini daily report"),
+      mp("P3 · AI Research", "News sentiment, financial anomaly detection, multi-agent reasoning", "Partly — AI Analyst: LangGraph multi-agent pipeline (7 specialists, conflict detection, risk agent, independent validator, Gemini reviewer that can only downgrade) with recommendation history; keyword news sentiment"),
     ],
   },
 ];
