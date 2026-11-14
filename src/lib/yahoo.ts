@@ -117,6 +117,22 @@ function str(value: unknown, fallback = "") {
   return typeof value === "string" ? value : fallback;
 }
 
+/**
+ * Longer history at the SAME candle size, fetched behind each chart range so indicators that need
+ * warm-up (SMA 200, Ichimoku 52, MACD…) can be drawn across the whole visible range.
+ * Yahoo keeps 5-minute data ~60 days, 15-minute ~60 days, 1-hour ~2 years.
+ */
+export const WARMUP_RANGE: Record<string, { range: string; interval: "5m" | "15m" | "1h" | "1d" | "1wk" }> = {
+  "1d": { range: "5d", interval: "5m" },
+  "5d": { range: "1mo", interval: "15m" },
+  "1mo": { range: "6mo", interval: "1h" },
+  "3mo": { range: "2y", interval: "1d" },
+  "6mo": { range: "2y", interval: "1d" },
+  "1y": { range: "2y", interval: "1d" },
+  "2y": { range: "5y", interval: "1d" },
+  "5y": { range: "10y", interval: "1wk" },
+};
+
 export const RANGE_INTERVAL: Record<string, { interval: string }> = {
   "1d": { interval: "5m" },
   "5d": { interval: "15m" },
@@ -144,8 +160,8 @@ export async function searchSymbols(query: string): Promise<SearchResult[]> {
     }));
 }
 
-/** `intervalOverride` lets research scripts request e.g. 5 years of DAILY candles. */
-export async function fetchChart(symbol: string, range = "1y", intervalOverride?: "1d" | "1wk") {
+/** `intervalOverride` requests a specific candle size, e.g. 5 years of DAILY candles or extra 5-minute history. */
+export async function fetchChart(symbol: string, range = "1y", intervalOverride?: "5m" | "15m" | "1h" | "1d" | "1wk") {
   const interval = intervalOverride ?? (RANGE_INTERVAL[range] ?? RANGE_INTERVAL["1y"]).interval;
   const encoded = encodeURIComponent(symbol);
   const data = (await fetchJson(

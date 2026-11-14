@@ -39,17 +39,23 @@ type Track = { horizonDays: number; period: string; buy: Side; sell: Side };
 const S = signalStats as unknown as Record<string, Track | undefined>;
 const CAL = calibration as unknown as { horizonDays: number; period: string; buy: Side; sell: Side };
 
-export const SIGNALS: Array<{ id: SignalId; label: string; hint: string; dailyOnly?: boolean; track: Track | null }> = [
+export const SIGNALS: Array<{ id: SignalId; label: string; hint: string; track: Track | null }> = [
   {
     id: "engine",
     label: "Swing engine",
-    hint: "BUY = uptrend + pullback, SELL = downtrend + bounce, replayed day by day (daily charts).",
-    dailyOnly: true,
+    hint: "BUY = uptrend + pullback, SELL = downtrend + bounce. A daily rule, replayed day by day; on 1D/5D/1M it sits on the first candle of that day.",
     track: CAL.buy || CAL.sell ? { horizonDays: CAL.horizonDays, period: CAL.period, buy: CAL.buy, sell: CAL.sell } : null,
   },
   { id: "supertrend", label: "Supertrend flips", hint: "BUY when Supertrend(10, 3) turns up, SELL when it turns down.", track: S["supertrend"] ?? null },
-  { id: "golden-cross", label: "Golden / Death cross", hint: "50-day average crossing the 200-day (needs ≥ 1 year of daily data).", dailyOnly: true, track: S["golden-cross"] ?? null },
+  { id: "golden-cross", label: "Golden / Death cross", hint: "50-day average crossing the 200-day. A daily rule; on intraday charts it sits on the first candle of that day.", track: S["golden-cross"] ?? null },
 ];
 
-export const DEFAULT_STUDIES: StudyId[] = ["sma", "bollinger"];
-export const DEFAULT_SIGNALS: SignalId[] = ["engine"];
+/** Marker colours per source and side (also shown as swatches in the legend). */
+export const SIGNAL_COLORS: Record<SignalId, { buy: string; sell: string }> = {
+  engine: { buy: "#3dd68c", sell: "#ff5c7a" },
+  supertrend: { buy: "#22d3ee", sell: "#fb923c" },
+  "golden-cross": { buy: "#facc15", sell: "#e879f9" },
+};
+
+export const DEFAULT_STUDIES: StudyId[] = ["sma"];
+export const DEFAULT_SIGNALS: SignalId[] = ["engine", "supertrend"];

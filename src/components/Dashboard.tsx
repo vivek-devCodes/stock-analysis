@@ -330,7 +330,7 @@ export function Dashboard({ initialSymbol }: { initialSymbol: string }) {
         </div>
       </div>
 
-      <div className="grid gap-4 p-4 xl:grid-cols-[240px_minmax(0,1fr)_320px]">
+      <div className="grid gap-4 p-4 xl:grid-cols-[200px_minmax(0,1fr)_300px]">
         <aside className="panel h-fit p-3">
           <div className="mb-2 flex items-center justify-between">
             <h2 className="text-xs font-semibold uppercase tracking-wider text-muted">Watchlist</h2>
@@ -439,11 +439,11 @@ export function Dashboard({ initialSymbol }: { initialSymbol: string }) {
                     News {data.newsSentiment.label}
                   </span>
                 </div>
-                <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-7">
+                <div className="mt-4 grid grid-cols-[repeat(auto-fill,minmax(110px,1fr))] gap-2">
                   {metrics.map(([label, value]) => (
-                    <div key={label} className="rounded-lg bg-white/3 px-2 py-1.5">
-                      <p className="text-[10px] uppercase tracking-wider text-muted"><TermLabel label={label} /></p>
-                      <p className="font-mono text-sm">{value}</p>
+                    <div key={label} className="min-w-0 rounded-lg bg-white/3 px-2 py-1.5">
+                      <p className="truncate text-[10px] uppercase tracking-wider text-muted"><TermLabel label={label} /></p>
+                      <p className="truncate font-mono text-sm" title={String(value)}>{value}</p>
                     </div>
                   ))}
                 </div>
@@ -473,7 +473,7 @@ export function Dashboard({ initialSymbol }: { initialSymbol: string }) {
                   </div>
                 )}
                 <PriceChart data={data} studies={studies} signals={signals} live={liveQuote} />
-                <SignalLegend signals={signals} intraday={data.interval !== "1d" && data.interval !== "1wk"} />
+                <SignalLegend signals={signals} />
               </section>
 
               <section className="panel p-4">

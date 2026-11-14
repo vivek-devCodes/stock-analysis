@@ -155,8 +155,10 @@ export type AnalyzeResponse = {
     score: number;
   };
   provider: string;
-  /** Swing-engine BUY/SELL transitions (daily charts only), replayed walk-forward. */
-  engineSignals?: import("./chart-studies").ChartSignal[];
+  /** Daily-rule markers (swing engine replayed walk-forward, golden/death cross), placed on this chart's candles. */
+  dailySignals?: import("./chart-studies").ChartSignal[];
+  /** Chart candles plus earlier warm-up candles at the same interval (indicators are computed on these). */
+  studyCandles?: Candle[];
 };
 
 export type MarketIndex = {
