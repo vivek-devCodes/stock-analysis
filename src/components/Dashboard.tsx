@@ -10,6 +10,8 @@ import type { AlertEvent, AlertRule, AnalyzeResponse, LiveQuote, SearchResult } 
 import { LiveBadge } from "./LiveBadge";
 import { TermLabel } from "./TermLabel";
 import { TrackBadge } from "./TrackBadge";
+import { ChartControls, SignalLegend } from "./ChartControls";
+import { DEFAULT_SIGNALS, DEFAULT_STUDIES, type SignalId, type StudyId } from "@/lib/chart-config";
 import { StockInsightPanel } from "./insights/StockInsightPanel";
 
 const LIVE_POLL_MS = 10_000;
@@ -30,7 +32,8 @@ function toneClass(tone: string) {
 export function Dashboard({ initialSymbol }: { initialSymbol: string }) {
   const [symbol, setSymbol] = useState(initialSymbol);
   const [range, setRange] = useState("1y");
-  const [overlay, setOverlay] = useState<"sma" | "ema" | "bb" | "forecast">("sma");
+  const [studies, setStudies] = useState<StudyId[]>(DEFAULT_STUDIES);
+  const [signals, setSignals] = useState<SignalId[]>(DEFAULT_SIGNALS);
   const [data, setData] = useState<AnalyzeResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -462,27 +465,15 @@ export function Dashboard({ initialSymbol }: { initialSymbol: string }) {
                       </button>
                     ))}
                   </div>
-                  <div className="flex gap-1">
-                    {(["sma", "ema", "bb", "forecast"] as const).map((item) => (
-                      <button
-                        key={item}
-                        onClick={() => setOverlay(item)}
-                        className={clsx(
-                          "rounded-lg px-2 py-1 text-xs font-semibold uppercase",
-                          overlay === item ? "bg-white/10 text-foreground" : "text-muted hover:bg-white/5",
-                        )}
-                      >
-                        {item === "sma" ? "SMA 20/50" : item === "ema" ? "EMA 12" : item === "bb" ? "Bollinger" : "Expected range"}
-                      </button>
-                    ))}
-                  </div>
+                  <ChartControls studies={studies} signals={signals} onStudies={setStudies} onSignals={setSignals} intraday={data.interval !== "1d" && data.interval !== "1wk"} />
                 </div>
                 {loading && (
                   <div className="mb-2 flex items-center gap-2 text-xs text-muted">
                     <Loader2 className="h-3 w-3 animate-spin" /> Refreshing {range}…
                   </div>
                 )}
-                <PriceChart data={data} overlay={overlay} live={liveQuote} />
+                <PriceChart data={data} studies={studies} signals={signals} live={liveQuote} />
+                <SignalLegend signals={signals} intraday={data.interval !== "1d" && data.interval !== "1wk"} />
               </section>
 
               <section className="panel p-4">

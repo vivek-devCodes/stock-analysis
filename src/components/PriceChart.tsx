@@ -2,7 +2,6 @@
 
 import { useEffect, useRef } from "react";
 import {
-  AreaSeries,
   CandlestickSeries,
   ColorType,
   CrosshairMode,
@@ -10,6 +9,8 @@ import {
   LineSeries,
   LineStyle,
   createChart,
+  createSeriesMarkers,
+  type SeriesMarker,
   type IChartApi,
   type ISeriesApi,
   type LogicalRange,
@@ -17,13 +18,18 @@ import {
   type UTCTimestamp,
 } from "lightweight-charts";
 import type { AnalyzeResponse, LiveQuote } from "@/lib/types";
+import { bollinger, crossSignals, donchian, ema, ichimoku, keltner, parabolicSar, sessionVwap, sma, supertrend, supertrendSignals, type ChartSignal, type Point } from "@/lib/chart-studies";
+import type { SignalId, StudyId } from "@/lib/chart-config";
 
 const INTERVAL_SECONDS: Record<string, number> = { "5m": 300, "15m": 900, "1h": 3600, "1d": 86400, "1wk": 604800 };
 type Bar = { time: UTCTimestamp; open: number; high: number; low: number; close: number };
 
 type Props = {
   data: AnalyzeResponse;
-  overlay: "sma" | "ema" | "bb" | "forecast";
+  /** Studies (indicators) drawn on the price pane. */
+  studies: StudyId[];
+  /** BUY/SELL marker sources drawn on the candles. */
+  signals: SignalId[];
   /** Latest live tick for this symbol; moves the last candle (or opens a new one). */
   live?: LiveQuote | null;
 };
@@ -57,7 +63,7 @@ function makeChart(el: HTMLElement, height: number, rightOffset = 8) {
   });
 }
 
-export function PriceChart({ data, overlay, live }: Props) {
+export function PriceChart({ data, studies, signals, live }: Props) {
   const priceRef = useRef<HTMLDivElement>(null);
   const rsiRef = useRef<HTMLDivElement>(null);
   const macdRef = useRef<HTMLDivElement>(null);
@@ -111,66 +117,108 @@ export function PriceChart({ data, overlay, live }: Props) {
       })),
     );
 
-    const addLine = (color: string, values: Array<{ time: number; value: number }>) => {
+    const times = data.candles.map((c) => c.time);
+    /** Line with gaps: bars without a value become whitespace so the line breaks there. */
+    const addLine = (color: string, values: Point[], opts: { width?: 1 | 2 | 3; dashed?: boolean; dots?: boolean; lastValue?: boolean; extendFuture?: boolean } = {}) => {
       const series = priceChart.addSeries(LineSeries, {
         color,
-        lineWidth: 2,
+        lineWidth: opts.width ?? 1,
+        lineStyle: opts.dashed ? LineStyle.Dashed : LineStyle.Solid,
+        lineVisible: !opts.dots,
+        pointMarkersVisible: !!opts.dots,
+        pointMarkersRadius: opts.dots ? 1.5 : undefined,
         priceLineVisible: false,
-        lastValueVisible: true,
+        lastValueVisible: opts.lastValue ?? false,
+        crosshairMarkerVisible: !opts.dots,
       });
-      series.setData(values.map((p) => ({ time: toTime(p.time), value: p.value })));
+      const byTime = new Map(values.map((p) => [p.time, p.value]));
+      const future = opts.extendFuture ? values.filter((p) => p.time > (times.at(-1) ?? 0)) : [];
+      series.setData([
+        ...times.map((t) => (byTime.has(t) ? { time: toTime(t), value: byTime.get(t)! } : { time: toTime(t) })),
+        ...future.map((p) => ({ time: toTime(p.time), value: p.value })),
+      ]);
       return series;
     };
+    const has = (id: StudyId) => studies.includes(id);
+    const c = data.candles;
+    const intraday = data.interval !== "1d" && data.interval !== "1wk";
 
-    if (overlay === "sma") {
-      addLine("#5b8cff", data.indicators.series.sma20);
-      addLine("#f5c542", data.indicators.series.sma50);
+    if (has("sma")) {
+      addLine("#5b8cff", sma(c, 20), { width: 2, lastValue: true });
+      addLine("#f5c542", sma(c, 50), { width: 2, lastValue: true });
+      addLine("#f472b6", sma(c, 200), { width: 2, lastValue: true });
     }
-    if (overlay === "ema") {
-      addLine("#c084fc", data.indicators.series.ema12);
+    if (has("ema-ribbon")) {
+      addLine("#22d3ee", ema(c, 9));
+      addLine("#a78bfa", ema(c, 20));
+      addLine("#fb923c", ema(c, 50), { width: 2 });
+      addLine("#e879f9", ema(c, 200), { width: 2 });
     }
-    if (overlay === "bb") {
-      addLine("#64748b", data.indicators.series.bb.map((b) => ({ time: b.time, value: b.upper })));
-      addLine("#94a3b8", data.indicators.series.bb.map((b) => ({ time: b.time, value: b.middle })));
-      addLine("#64748b", data.indicators.series.bb.map((b) => ({ time: b.time, value: b.lower })));
+    if (has("bollinger")) {
+      const bb = bollinger(c);
+      addLine("#64748b", bb.upper);
+      addLine("#94a3b8", bb.middle, { dashed: true });
+      addLine("#64748b", bb.lower);
     }
-    if (overlay === "forecast" && data.forecast.points.length) {
-      const last = data.candles.at(-1);
-      if (last) {
-        const mean = priceChart.addSeries(LineSeries, {
-          color: "#5b8cff",
-          lineWidth: 2,
-          lineStyle: LineStyle.Dashed,
-          priceLineVisible: false,
-        });
-        const high = priceChart.addSeries(AreaSeries, {
-          lineColor: "rgba(91,140,255,0.0)",
-          topColor: "rgba(91,140,255,0.18)",
-          bottomColor: "rgba(91,140,255,0.02)",
-          priceLineVisible: false,
-          lastValueVisible: false,
-        });
-        const path = [
-          { time: toTime(last.time), value: last.close },
-          ...data.forecast.points.map((p) => ({ time: toTime(p.time), value: p.mean })),
-        ];
-        mean.setData(path);
-        high.setData([
-          { time: toTime(last.time), value: last.close },
-          ...data.forecast.points.map((p) => ({ time: toTime(p.time), value: p.high })),
-        ]);
-        const low = priceChart.addSeries(LineSeries, {
-          color: "rgba(91,140,255,0.45)",
-          lineWidth: 1,
-          priceLineVisible: false,
-          lastValueVisible: false,
-        });
-        low.setData([
-          { time: toTime(last.time), value: last.close },
-          ...data.forecast.points.map((p) => ({ time: toTime(p.time), value: p.low })),
-        ]);
-      }
+    if (has("keltner")) {
+      const k = keltner(c);
+      addLine("#2dd4bf", k.upper, { dashed: true });
+      addLine("#2dd4bf", k.lower, { dashed: true });
     }
+    if (has("donchian")) {
+      const d = donchian(c);
+      addLine("#fbbf24", d.upper);
+      addLine("#fbbf24", d.lower);
+    }
+    if (has("supertrend")) {
+      const st = supertrend(c);
+      addLine("#3dd68c", st.up, { width: 2 });
+      addLine("#ff5c7a", st.down, { width: 2 });
+    }
+    if (has("psar")) addLine("#e2e8f0", parabolicSar(c), { dots: true });
+    if (has("ichimoku")) {
+      const ic = ichimoku(c);
+      addLine("#38bdf8", ic.tenkan);
+      addLine("#f87171", ic.kijun);
+      addLine("rgba(61,214,140,0.8)", ic.spanA, { extendFuture: true });
+      addLine("rgba(255,92,122,0.8)", ic.spanB, { extendFuture: true });
+      addLine("rgba(167,139,250,0.6)", ic.lagging, { dashed: true });
+    }
+    if (has("vwap") && intraday) addLine("#facc15", sessionVwap(c), { width: 2, lastValue: true });
+    if (has("levels")) {
+      data.insight.support.slice(0, 2).forEach((price, i) =>
+        candles.createPriceLine({ price, color: "#3dd68c", lineWidth: 1, lineStyle: LineStyle.Dashed, axisLabelVisible: true, title: `S${i + 1}` }),
+      );
+      data.insight.resistance.slice(0, 2).forEach((price, i) =>
+        candles.createPriceLine({ price, color: "#ff5c7a", lineWidth: 1, lineStyle: LineStyle.Dashed, axisLabelVisible: true, title: `R${i + 1}` }),
+      );
+    }
+    if (has("range") && data.forecast.points.length) {
+      const last = c.at(-1)!;
+      const band = (key: "high" | "low") => [{ time: last.time, value: last.close }, ...data.forecast.points.map((p) => ({ time: p.time, value: p[key] }))];
+      addLine("rgba(91,140,255,0.7)", band("high"), { dashed: true, extendFuture: true });
+      addLine("rgba(91,140,255,0.7)", band("low"), { dashed: true, extendFuture: true });
+    }
+
+    // BUY / SELL markers on the candles.
+    const marks: ChartSignal[] = [];
+    if (signals.includes("engine")) marks.push(...(data.engineSignals ?? []));
+    if (signals.includes("supertrend")) marks.push(...supertrendSignals(c));
+    if (signals.includes("golden-cross") && !intraday) marks.push(...crossSignals(c));
+    const inRange = new Set(times);
+    const colour = { engine: { buy: "#3dd68c", sell: "#ff5c7a" }, supertrend: { buy: "#22d3ee", sell: "#fb923c" }, "golden-cross": { buy: "#facc15", sell: "#e879f9" } } as const;
+    const markers: SeriesMarker<Time>[] = marks
+      .filter((m) => inRange.has(m.time))
+      .sort((x, y) => x.time - y.time)
+      .map((m) => ({
+        time: toTime(m.time),
+        position: m.side === "buy" ? "belowBar" : "aboveBar",
+        shape: m.side === "buy" ? "arrowUp" : "arrowDown",
+        color: colour[m.source][m.side],
+        text: m.label,
+        size: m.source === "engine" ? 1.2 : 1,
+      }));
+    if (markers.length) createSeriesMarkers(candles, markers);
 
     const rsi = rsiChart.addSeries(LineSeries, {
       color: "#f5c542",
@@ -243,7 +291,7 @@ export function PriceChart({ data, overlay, live }: Props) {
       charts.current.forEach((c) => c.remove());
       charts.current = [];
     };
-  }, [data, overlay]);
+  }, [data, studies, signals]);
 
   // Live tick → update the forming candle, or start the next one when its interval has passed.
   useEffect(() => {
