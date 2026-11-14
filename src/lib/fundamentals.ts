@@ -189,3 +189,14 @@ export async function getFundamentals(): Promise<FundamentalsSnapshot> {
   }
   return refresh();
 }
+
+/** One stock's fundamentals: from the cached universe snapshot when available, otherwise fetched now. */
+export async function getFundamentalsFor(symbol: string): Promise<Fundamentals | null> {
+  const cached = snapshot?.data.stocks.find((s) => s.symbol === symbol);
+  if (cached && Date.now() - (snapshot?.at ?? 0) < FRESH_MS) return cached;
+  try {
+    return await loadOne(symbol);
+  } catch {
+    return cached ?? null;
+  }
+}

@@ -10,6 +10,7 @@ import type { AlertEvent, AlertRule, AnalyzeResponse, LiveQuote, SearchResult } 
 import { LiveBadge } from "./LiveBadge";
 import { TermLabel } from "./TermLabel";
 import { TrackBadge } from "./TrackBadge";
+import { StockInsightPanel } from "./insights/StockInsightPanel";
 
 const LIVE_POLL_MS = 10_000;
 import { ALERT_KEY, EVENT_KEY, loadJson, loadWatchlist, saveJson, saveWatchlist } from "@/lib/watchlist";
@@ -578,6 +579,8 @@ export function Dashboard({ initialSymbol }: { initialSymbol: string }) {
                 )}
               </section>
 
+              <StockInsightPanel key={data.quote.symbol} symbol={data.quote.symbol} defaultOpen />
+
               <section className="panel p-4">
                 <p className="text-[11px] font-semibold uppercase tracking-wider text-muted">
                   Expected range · next {data.forecast.horizon} bars
@@ -842,13 +845,14 @@ function DailyReportModal({
         <div className="mt-4 space-y-4 text-sm">
           <div className="rounded-xl bg-accent/10 border border-accent/20 p-4">
             <h3 className="font-semibold text-accent flex items-center gap-2">
-              <Mail className="h-4 w-4" /> 8:45 AM Daily Automation Engine
+              <Mail className="h-4 w-4" /> Gemini daily report (on demand)
             </h3>
             <p className="mt-1 text-xs leading-relaxed text-muted">
-              Every morning at <strong>8:45 AM IST</strong> (before market opens at 9:15 AM), the pipeline aggregates
-              NSE/BSE and Yahoo Finance data across all major Indian sectors (Banking, IT, Auto, Pharma, Energy, etc.).
-              It runs statistical indicators (RSI, MACD, Bollinger Bands, ATR, Moving Averages) and prompts
-              <strong> Google Gemini 2.5 Flash</strong> to deliver curated intraday, short-term (1-2 weeks), and long-term (3-6 months) stock recommendations directly to your email.
+              Scheduled emails now come from the <strong>autonomous AI Analyst</strong>: a <strong>pre-market digest at 08:30 IST</strong> and a
+              <strong> post-market digest at 16:15 IST</strong> (Mon–Fri), each with every decision, its evidence and the rules applied.
+              This Gemini report runs <strong>on demand</strong> with the buttons below: it aggregates NSE/BSE and Yahoo Finance data across
+              major sectors, computes indicators (RSI, MACD, Bollinger Bands, ATR, moving averages) and asks
+              <strong> Google Gemini 2.5 Flash</strong> for intraday, short-term and long-term ideas, emailed to you.
             </p>
           </div>
 
@@ -868,9 +872,8 @@ function DailyReportModal({
             <div className="rounded-xl border border-line bg-card p-3">
               <p className="text-xs font-semibold text-muted uppercase">Automation &amp; Config</p>
               <ul className="mt-2 space-y-1 text-xs text-foreground/80">
-                <li>• <strong>Cron:</strong> Mon-Fri at 8:45 AM IST</li>
+                <li>• <strong>Schedule:</strong> on demand (scheduled emails = AI Analyst digests, 08:30 &amp; 16:15 IST)</li>
                 <li>• <strong>CLI Command:</strong> <code className="text-accent">npm run daily-report</code></li>
-                <li>• <strong>Daemon:</strong> <code className="text-accent">npm run daily-report:cron</code></li>
                 <li>• <strong>Setup:</strong> Set <code className="text-warn">GEMINI_API_KEY</code> &amp; <code className="text-warn">SMTP_PASS</code> in <code className="text-muted">.env</code></li>
               </ul>
             </div>
@@ -879,9 +882,9 @@ function DailyReportModal({
           <div className="rounded-xl border border-line bg-card p-3 text-xs">
             <p className="font-semibold uppercase text-muted">⭐ Your watchlist in the email</p>
             <p className="mt-1 text-foreground/80">
-              &quot;Run &amp; Send Report Now&quot; includes your {watchlist.length} watchlist stocks. The scheduled
-              8:45 AM email can&apos;t read this browser&apos;s storage, so paste this into the{" "}
-              <code className="text-warn">WATCHLIST_SYMBOLS</code> environment variable on Vercel:
+              &quot;Run &amp; Send Report Now&quot; includes your {watchlist.length} watchlist stocks. If this report is triggered
+              without this browser (e.g. via its API), it reads the{" "}
+              <code className="text-warn">WATCHLIST_SYMBOLS</code> environment variable on Vercel instead — paste this there:
             </p>
             <code className="mt-2 block select-all break-all rounded-lg bg-[#0a0f16] p-2 text-accent">
               {watchlist.join(",")}

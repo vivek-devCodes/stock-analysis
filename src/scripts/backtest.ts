@@ -16,6 +16,7 @@
  */
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { THRESHOLDS } from "../lib/agents/thresholds";
 import { buildInsight } from "../lib/analysis";
 import { computeIndicators } from "../lib/indicators";
 import { getAllStocks } from "../lib/stock-universe";
@@ -39,7 +40,7 @@ const TRAIN_FRACTION = 0.6; // older 60% of dates = design period; newest 40% = 
 // exchange/SEBI charges, stamp duty, GST and slippage — about 0.3% in total.
 const COST = Number(arg("cost") ?? 0.003);
 // A call is "proven" only if, out of sample, it beats the average stock AND makes money after costs.
-const PROVEN = { minN: 200, minHit: 0.55, minProfitFactor: 1.1 };
+const PROVEN = { minN: THRESHOLDS.proven.minSignals, minHit: THRESHOLDS.proven.minHitRate, minProfitFactor: THRESHOLDS.proven.minProfitFactor };
 
 async function loadCandles(): Promise<Record<string, Candle[]>> {
   if (CACHE && existsSync(CACHE)) return JSON.parse(readFileSync(CACHE, "utf8"));

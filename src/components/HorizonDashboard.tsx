@@ -26,6 +26,7 @@ import { NAV_ITEMS } from "@/lib/nav";
 import { PageHeader } from "./shell/PageHeader";
 import { TermLabel } from "./TermLabel";
 import { TrackBadge } from "./TrackBadge";
+import { StockInsightPanel } from "./insights/StockInsightPanel";
 
 const INITIAL_SHOWN = 10;
 
@@ -307,6 +308,8 @@ function PickCard({ pick: p }: { pick: ScreenPick }) {
       >
         Open full chart <ExternalLink className="h-3 w-3" />
       </Link>
+
+      <StockInsightPanel symbol={p.symbol} compact />
     </article>
   );
 }

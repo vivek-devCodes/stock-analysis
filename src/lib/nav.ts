@@ -1,5 +1,6 @@
 import {
   BookOpen,
+  Bot,
   CandlestickChart,
   Clock,
   Filter,
@@ -7,6 +8,7 @@ import {
   Landmark,
   LineChart,
   Newspaper,
+  PieChart,
   Repeat,
   type LucideIcon,
 } from "lucide-react";
@@ -40,6 +42,8 @@ export const NAV_GROUPS: Array<{ title: string; items: NavItem[] }> = [
   {
     title: "Research",
     items: [
+      { href: "/agent", label: "AI Analyst", icon: Bot, description: "Multi-agent analysis: evidence, risk check and independent validation", tone: "text-[#a78bfa]" },
+      { href: "/sectors", label: "Sectors", icon: PieChart, description: "Sector strength, buying/selling pressure and stock returns", tone: "text-[#34d399]" },
       { href: "/screener", label: "Stock Screener", icon: Filter, description: "Fundamentals: quality, growth and value", tone: "text-[#4fd1c5]" },
       { href: "/news", label: "Market News", icon: Newspaper, description: "Headlines from Indian financial media", tone: "text-[#f472b6]" },
       { href: "/glossary", label: "Glossary", icon: BookOpen, description: "Stock-market terms, formulas and definitions", tone: "text-[#fbbf24]" },

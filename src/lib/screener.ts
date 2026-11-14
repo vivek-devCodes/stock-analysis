@@ -47,7 +47,7 @@ function base(symbol: string, quote: Quote) {
   };
 }
 
-type Scan = { pick: ScreenPick; time: number };
+export type Scan = { pick: ScreenPick; time: number };
 
 /** For desks whose rules have not been backtested yet. */
 const untested = (horizonDays: number): TrackRecord => ({
@@ -73,7 +73,7 @@ function swingCore(quote: Quote, candles: Candle[]) {
 /*  Intraday — 15-min candles, today's session                         */
 /* ------------------------------------------------------------------ */
 
-async function scanIntraday(symbol: string): Promise<Scan | null> {
+export async function scanIntraday(symbol: string): Promise<Scan | null> {
   const { quote, candles } = await fetchChart(symbol, "5d");
   if (candles.length < 30) return null;
 
@@ -203,7 +203,7 @@ async function scanIntraday(symbol: string): Promise<Scan | null> {
 /*  Short term — daily candles, 1–2 week swing                         */
 /* ------------------------------------------------------------------ */
 
-async function scanShortTerm(symbol: string): Promise<Scan | null> {
+export async function scanShortTerm(symbol: string): Promise<Scan | null> {
   const { quote, candles } = await fetchChart(symbol, "1y");
   if (candles.length < 60) return null;
   const { ind, fc, insight } = swingCore(quote, candles);
@@ -258,7 +258,7 @@ async function scanShortTerm(symbol: string): Promise<Scan | null> {
 /*  Long term — daily candles, 2 years                                 */
 /* ------------------------------------------------------------------ */
 
-async function scanLongTerm(symbol: string): Promise<Scan | null> {
+export async function scanLongTerm(symbol: string): Promise<Scan | null> {
   const { quote, candles } = await fetchChart(symbol, "2y");
   if (candles.length < 210) return null;
   const closes = candles.map((c) => c.close);
@@ -355,7 +355,7 @@ function strikeStep(symbol: string, price: number) {
   return 100;
 }
 
-async function scanOptions(symbol: string): Promise<Scan | null> {
+export async function scanOptions(symbol: string): Promise<Scan | null> {
   const { quote, candles } = await fetchChart(symbol, "1y");
   if (candles.length < 60) return null;
   const { ind, insight } = swingCore(quote, candles);

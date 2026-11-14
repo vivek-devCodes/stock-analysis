@@ -148,3 +148,52 @@ export async function testEmailConnection(): Promise<boolean> {
     return false;
   }
 }
+
+/* ------------------------------------------------------------------ */
+/*  Trade-signal alerts (multi-agent engine)                           */
+/* ------------------------------------------------------------------ */
+
+const escapeHtml = (s: string) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
+
+/** Plain, information-dense alert in the format the operating spec requires. */
+export async function sendSignalEmail(params: {
+  subject: string;
+  lines: Array<[string, string]>;
+  notes: string[];
+}): Promise<{ success: boolean; error?: string }> {
+  const to = (process.env.REPORT_RECIPIENTS ?? "").split(",").map((e) => e.trim()).filter(Boolean);
+  if (!to.length) return { success: false, error: "REPORT_RECIPIENTS not configured" };
+  try {
+    const transporter = createTransporter();
+    const rows = params.lines
+      .map(([k, v]) => `<tr><td style="padding:4px 12px 4px 0;color:#8b95a5;white-space:nowrap;vertical-align:top">${escapeHtml(k)}</td><td style="padding:4px 0;color:#e8edf4">${escapeHtml(v)}</td></tr>`)
+      .join("");
+    const notes = params.notes.map((n) => `<li style="margin:4px 0">${escapeHtml(n)}</li>`).join("");
+    await transporter.sendMail({
+      from: `"Apex Desk — AI Analyst" <${process.env.SMTP_USER}>`,
+      to: to.join(", "),
+      subject: params.subject,
+      text: [...params.lines.map(([k, v]) => `${k}: ${v}`), "", ...params.notes].join("\n"),
+      html: `<div style="background:#0f1419;padding:20px;font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#e8edf4">
+        <h2 style="margin:0 0 12px;font-size:18px">${escapeHtml(params.subject)}</h2>
+        <table style="font-size:14px;border-collapse:collapse">${rows}</table>
+        <ul style="margin-top:16px;padding-left:18px;font-size:12px;color:#8b95a5">${notes}</ul>
+      </div>`,
+    });
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : "Email send failed" };
+  }
+}
+
+/** Send a pre-rendered HTML email (used by the agent scan digest). */
+export async function sendHtmlEmail(subject: string, html: string, text: string): Promise<{ success: boolean; error?: string }> {
+  const to = (process.env.REPORT_RECIPIENTS ?? "").split(",").map((e) => e.trim()).filter(Boolean);
+  if (!to.length) return { success: false, error: "REPORT_RECIPIENTS not configured" };
+  try {
+    await createTransporter().sendMail({ from: `"Apex Desk — AI Analyst" <${process.env.SMTP_USER}>`, to: to.join(", "), subject, html, text });
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : "Email send failed" };
+  }
+}

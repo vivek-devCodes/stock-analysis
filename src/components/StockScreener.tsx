@@ -6,6 +6,7 @@ import {
   ArrowDown,
   ArrowUp,
   BadgeIndianRupee,
+  Bot,
   ExternalLink,
   Filter,
   Flame,
@@ -20,10 +21,11 @@ import {
   Wallet,
   type LucideIcon,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { clsx } from "@/lib/format";
 import { PageHeader } from "./shell/PageHeader";
 import { TermHelp } from "./TermLabel";
+import { StockInsightPanel } from "./insights/StockInsightPanel";
 
 type F = {
   symbol: string;
@@ -84,6 +86,7 @@ export function StockScreener() {
   const [meta, setMeta] = useState<{ fetchedAt: string; failed: string[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [preset, setPreset] = useState("all");
+  const [openRow, setOpenRow] = useState<string | null>(null);
   const [sector, setSector] = useState("All");
   const [sort, setSort] = useState<{ key: string; dir: 1 | -1 }>({ key: "overall", dir: -1 });
   const [custom, setCustom] = useState({ minRoe: "", maxPe: "", maxDe: "", minGrowth: "", minYield: "" });
@@ -229,12 +232,21 @@ export function StockScreener() {
                 </thead>
                 <tbody>
                   {rows.map((f) => (
-                    <tr key={f.symbol} className="border-b border-line/60 hover:bg-white/[0.03]">
+                    <Fragment key={f.symbol}>
+                    <tr className="border-b border-line/60 hover:bg-white/[0.03]">
                       <td className="px-3 py-2">
                         <Link href={`/analyze?symbol=${encodeURIComponent(f.symbol)}`} className="font-semibold hover:text-accent">
                           {short(f.symbol)}
                         </Link>
                         <p className="max-w-[200px] truncate text-[11px] text-muted">{f.name} · {f.sector}</p>
+                        <button
+                          type="button"
+                          onClick={() => setOpenRow((o) => (o === f.symbol ? null : f.symbol))}
+                          aria-expanded={openRow === f.symbol}
+                          className="mt-1 inline-flex items-center gap-1 text-[11px] text-[#c4b5fd] hover:underline"
+                        >
+                          <Bot className="h-3 w-3" aria-hidden /> {openRow === f.symbol ? "Hide risk & verdict" : "Risk & verdict"}
+                        </button>
                         {f.flags.length > 0 && (
                           <div className="mt-1 flex flex-wrap gap-1">
                             {f.flags.map((fl) => (
@@ -276,6 +288,14 @@ export function StockScreener() {
                         </a>
                       </td>
                     </tr>
+                    {openRow === f.symbol && (
+                      <tr className="border-b border-line/60 bg-white/[0.02]">
+                        <td colSpan={COLS.length + 2} className="px-3 py-3">
+                          <StockInsightPanel symbol={f.symbol} defaultOpen title={`Agent view & risk — ${short(f.symbol)}`} />
+                        </td>
+                      </tr>
+                    )}
+                    </Fragment>
                   ))}
                 </tbody>
               </table>
