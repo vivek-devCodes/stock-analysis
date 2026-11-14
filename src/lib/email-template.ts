@@ -24,8 +24,29 @@ export type SectorAnalysis = {
   reasoning: string;
 };
 
+/** Rule-based analysis of one stock from the user's own watchlist. */
+export type WatchlistEntry = {
+  symbol: string;
+  name: string;
+  currency: string;
+  price: number;
+  changePercent: number;
+  recommendation: "BUY" | "SELL" | "HOLD";
+  score: number;
+  confidence: number;
+  rsi: number | null;
+  forecastChangePercent: number;
+  forecastPrice: number;
+  support: number | null;
+  resistance: number | null;
+  signals: string[];
+  risks: string[];
+  news: Array<{ title: string; link: string; publisher: string; sentiment: "positive" | "negative" | "neutral" }>;
+};
+
 export type DailyReport = {
   date: string;
+  watchlist?: WatchlistEntry[];
   marketOverview: {
     nifty: { price: number; change: number; changePercent: number };
     sensex: { price: number; change: number; changePercent: number };
@@ -69,6 +90,15 @@ function fmt(n: number): string {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   });
+}
+
+/** Escape third-party text (news titles, names) before putting it in HTML. */
+function esc(s: string): string {
+  return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
+}
+
+function safeUrl(url: string): string {
+  return /^https?:\/\//i.test(url) ? url : "#";
 }
 
 function changeColor(value: number): string {
@@ -334,6 +364,50 @@ export function buildEmailHTML(report: DailyReport): string {
       </td></tr>`;
   }
 
+  // ── your watchlist ──
+  function watchlistSection(): string {
+    const list = report.watchlist ?? [];
+    if (list.length === 0) return "";
+    const cards = list
+      .map((w) => {
+        const recColor = w.recommendation === "BUY" ? C.green : w.recommendation === "SELL" ? C.red : C.yellow;
+        const level = (v: number | null) => (v == null ? "—" : fmt(v));
+        const news = w.news
+          .slice(0, 2)
+          .map(
+            (n) =>
+              `<div style="margin-top:4px;font-size:12px;"><span style="color:${n.sentiment === "positive" ? C.green : n.sentiment === "negative" ? C.red : C.textMuted};">●</span> <a href="${esc(safeUrl(n.link))}" style="color:${C.text};text-decoration:none;">${esc(n.title)}</a> <span style="color:${C.textMuted};">— ${esc(n.publisher)}</span></div>`,
+          )
+          .join("");
+        return `
+        <div style="background:${C.bgRow};border:1px solid ${C.border};border-left:3px solid ${recColor};border-radius:8px;padding:14px 16px;margin-bottom:10px;">
+          <table width="100%" cellpadding="0" cellspacing="0"><tr>
+            <td style="vertical-align:top;">
+              <span style="font-weight:700;color:${C.text};font-size:15px;">${esc(w.symbol)}</span>
+              <span style="color:${C.textMuted};font-size:12px;margin-left:6px;">${esc(w.name)}</span>
+              <div style="margin-top:6px;">${recBadge(w.recommendation)} <span style="color:${C.textMuted};font-size:11px;margin-left:6px;">score ${w.score} · confidence ${w.confidence}%${w.rsi != null ? ` · RSI ${w.rsi.toFixed(1)}` : ""}</span></div>
+            </td>
+            <td style="vertical-align:top;text-align:right;width:160px;">
+              <div style="color:${C.text};font-size:16px;font-weight:700;">${esc(w.currency)} ${fmt(w.price)}</div>
+              <div style="color:${changeColor(w.changePercent)};font-size:12px;">${changeArrow(w.changePercent)} ${w.changePercent.toFixed(2)}% today</div>
+            </td>
+          </tr></table>
+          <div style="margin-top:8px;font-size:12px;color:${C.textMuted};">
+            10-bar forecast: <span style="color:${changeColor(w.forecastChangePercent)};font-weight:600;">${w.forecastChangePercent >= 0 ? "+" : ""}${w.forecastChangePercent.toFixed(2)}% → ${fmt(w.forecastPrice)}</span>
+            &nbsp;·&nbsp; Support <span style="color:${C.green};">${level(w.support)}</span>
+            &nbsp;·&nbsp; Resistance <span style="color:${C.red};">${level(w.resistance)}</span>
+          </div>
+          ${w.signals.length ? `<div style="margin-top:6px;font-size:12px;color:${C.text};">✔ ${w.signals.slice(0, 3).map(esc).join(" · ")}</div>` : ""}
+          ${w.risks.length ? `<div style="margin-top:4px;font-size:12px;color:${C.yellow};">⚠ ${w.risks.slice(0, 2).map(esc).join(" · ")}</div>` : ""}
+          ${news}
+        </div>`;
+      })
+      .join("");
+    return `
+      ${sectionTitle("⭐", "Your Watchlist")}
+      <tr><td style="padding:0 28px 20px;">${cards}</td></tr>`;
+  }
+
   // ── assemble ──────────────────────────────────────────────────────────────
 
   return `<!DOCTYPE html>
@@ -383,6 +457,9 @@ export function buildEmailHTML(report: DailyReport): string {
             <div style="color:${C.textMuted};font-size:12px;margin-top:8px;">${mo.sentimentReason}</div>
           </div>
         </td></tr>
+
+        <!-- Your Watchlist -->
+        ${watchlistSection()}
 
         <!-- Intraday Picks -->
         ${sectionTitle("🎯", "Intraday Picks")}

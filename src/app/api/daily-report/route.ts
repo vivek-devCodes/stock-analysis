@@ -1,8 +1,16 @@
 import { NextRequest } from "next/server";
 import { runDailyAnalysis } from "@/scripts/daily-analysis";
 import { testEmailConnection } from "@/lib/email-service";
+import { requireRole } from "@/lib/auth/guard";
+import { sanitizeSymbols } from "@/lib/symbols";
+
+// The full scan (~40 stocks + Gemini) can take a minute or more.
+export const maxDuration = 300;
 
 export async function GET(request: NextRequest) {
+  const auth = await requireRole(request, ["admin"]);
+  if (auth instanceof Response) return auth;
+
   const action = request.nextUrl.searchParams.get("action");
 
   if (action === "test-email") {
@@ -23,8 +31,15 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  const auth = await requireRole(request, ["admin"]);
+  if (auth instanceof Response) return auth;
+
+  // Optional body: { watchlist: ["RELIANCE.NS", ...] } — sent by the dashboard from its saved watchlist.
+  const body = await request.json().catch(() => ({}));
+  const watchlist = body && Array.isArray(body.watchlist) ? sanitizeSymbols(body.watchlist) : undefined;
+
   try {
-    const report = await runDailyAnalysis();
+    const report = await runDailyAnalysis({ watchlist });
     return Response.json({
       success: true,
       report,
