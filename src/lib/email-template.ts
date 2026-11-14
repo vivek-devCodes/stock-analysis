@@ -35,8 +35,9 @@ export type WatchlistEntry = {
   score: number;
   confidence: number;
   rsi: number | null;
-  forecastChangePercent: number;
-  forecastPrice: number;
+  /** 80% expected price range over the next 10 trading days. */
+  rangeLow: number;
+  rangeHigh: number;
   support: number | null;
   resistance: number | null;
   signals: string[];
@@ -393,7 +394,7 @@ export function buildEmailHTML(report: DailyReport): string {
             </td>
           </tr></table>
           <div style="margin-top:8px;font-size:12px;color:${C.textMuted};">
-            10-bar forecast: <span style="color:${changeColor(w.forecastChangePercent)};font-weight:600;">${w.forecastChangePercent >= 0 ? "+" : ""}${w.forecastChangePercent.toFixed(2)}% → ${fmt(w.forecastPrice)}</span>
+            10-day range (80%): <span style="color:${C.text};font-weight:600;">${fmt(w.rangeLow)} – ${fmt(w.rangeHigh)}</span>
             &nbsp;·&nbsp; Support <span style="color:${C.green};">${level(w.support)}</span>
             &nbsp;·&nbsp; Resistance <span style="color:${C.red};">${level(w.resistance)}</span>
           </div>

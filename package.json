@@ -10,7 +10,9 @@
     "daily-report": "tsx src/scripts/daily-analysis.ts",
     "daily-report:cron": "tsx src/scripts/daily-analysis.ts --cron",
     "test-email": "tsx src/scripts/daily-analysis.ts --test-email",
-    "hash-password": "node scripts/hash-password.mjs"
+    "hash-password": "node scripts/hash-password.mjs",
+    "test:indicators": "tsx src/scripts/test-indicators.ts",
+    "backtest": "tsx src/scripts/backtest.ts"
   },
   "dependencies": {
     "@google/genai": "^2.30.0",

@@ -11,24 +11,53 @@ function sma(values: number[], period: number) {
   return out;
 }
 
-function ema(values: number[], period: number) {
+/**
+ * EMA seeded with the SMA of the first `period` real values. Leading nulls (e.g. MACD before
+ * EMA26 exists) are skipped instead of being treated as zeros, which would bias the line.
+ */
+function ema(values: Array<number | null>, period: number) {
   const out: Array<number | null> = Array(values.length).fill(null);
   const k = 2 / (period + 1);
   let prev: number | null = null;
+  const seed: number[] = [];
   for (let i = 0; i < values.length; i += 1) {
-    if (i < period - 1) continue;
+    const v = values[i];
+    if (v == null) continue;
     if (prev == null) {
-      const seed = values.slice(0, i + 1).reduce((a, b) => a + b, 0) / (i + 1);
-      prev = seed;
-      out[i] = seed;
+      seed.push(v);
+      if (seed.length === period) {
+        prev = seed.reduce((a, b) => a + b, 0) / period;
+        out[i] = prev;
+      }
     } else {
-      prev = values[i] * k + prev * (1 - k);
+      prev = v * k + prev * (1 - k);
       out[i] = prev;
     }
   }
   return out;
 }
 
+/** SMA that ignores leading nulls (used to smooth Stochastic %K and %D). */
+function smaNullable(values: Array<number | null>, period: number) {
+  const out: Array<number | null> = Array(values.length).fill(null);
+  const win: number[] = [];
+  for (let i = 0; i < values.length; i += 1) {
+    const v = values[i];
+    if (v == null) continue;
+    win.push(v);
+    if (win.length > period) win.shift();
+    if (win.length === period) out[i] = win.reduce((a, b) => a + b, 0) / period;
+  }
+  return out;
+}
+
+function rsiFrom(gain: number, loss: number) {
+  if (gain === 0 && loss === 0) return 50; // flat price: no momentum either way
+  if (loss === 0) return 100;
+  return 100 - 100 / (1 + gain / loss);
+}
+
+/** Wilder's RSI: first average = simple mean of `period` moves, then Wilder smoothing. */
 function rsi(values: number[], period = 14) {
   const out: Array<number | null> = Array(values.length).fill(null);
   let gain = 0;
@@ -43,19 +72,18 @@ function rsi(values: number[], period = 14) {
       if (i === period) {
         gain /= period;
         loss /= period;
-        const rs = loss === 0 ? 100 : gain / loss;
-        out[i] = 100 - 100 / (1 + rs);
+        out[i] = rsiFrom(gain, loss);
       }
     } else {
       gain = (gain * (period - 1) + up) / period;
       loss = (loss * (period - 1) + down) / period;
-      const rs = loss === 0 ? 100 : gain / loss;
-      out[i] = 100 - 100 / (1 + rs);
+      out[i] = rsiFrom(gain, loss);
     }
   }
   return out;
 }
 
+/** Population standard deviation (what Bollinger Bands use). */
 function stdev(values: number[], period: number) {
   const out: Array<number | null> = Array(values.length).fill(null);
   for (let i = period - 1; i < values.length; i += 1) {
@@ -67,49 +95,103 @@ function stdev(values: number[], period: number) {
   return out;
 }
 
+function trueRange(candles: Candle[]) {
+  return candles.map((c, i) =>
+    i === 0
+      ? c.high - c.low
+      : Math.max(c.high - c.low, Math.abs(c.high - candles[i - 1].close), Math.abs(c.low - candles[i - 1].close)),
+  );
+}
+
+/** Wilder's ATR: first value = mean of the first `period` true ranges, then (prev x (n-1) + TR) / n. */
 function atr(candles: Candle[], period = 14) {
   const out: Array<number | null> = Array(candles.length).fill(null);
-  const trs: number[] = [];
-  for (let i = 0; i < candles.length; i += 1) {
-    if (i === 0) {
-      trs.push(candles[i].high - candles[i].low);
-    } else {
-      trs.push(
-        Math.max(
-          candles[i].high - candles[i].low,
-          Math.abs(candles[i].high - candles[i - 1].close),
-          Math.abs(candles[i].low - candles[i - 1].close),
-        ),
-      );
-    }
-  }
-  let sum = 0;
-  for (let i = 0; i < trs.length; i += 1) {
-    sum += trs[i];
-    if (i >= period) sum -= trs[i - period];
-    if (i >= period - 1) out[i] = sum / period;
+  const trs = trueRange(candles);
+  let prev: number | null = null;
+  for (let i = period - 1; i < trs.length; i += 1) {
+    if (prev == null) prev = trs.slice(0, period).reduce((a, b) => a + b, 0) / period;
+    else prev = (prev * (period - 1) + trs[i]) / period;
+    out[i] = prev;
   }
   return out;
 }
 
+/**
+ * Wilder's Directional Movement: +DI, -DI and ADX (trend strength, 0-100).
+ * ADX < 20 means no real trend (trend signals unreliable); > 25 means trending.
+ */
+function adx(candles: Candle[], period = 14) {
+  const n = candles.length;
+  const plusDI: Array<number | null> = Array(n).fill(null);
+  const minusDI: Array<number | null> = Array(n).fill(null);
+  const adxOut: Array<number | null> = Array(n).fill(null);
+  if (n <= period * 2) return { plusDI, minusDI, adx: adxOut };
+  const trs = trueRange(candles);
+  let sTR = 0;
+  let sPlus = 0;
+  let sMinus = 0;
+  const dx: number[] = [];
+  let adxPrev: number | null = null;
+  for (let i = 1; i < n; i += 1) {
+    const upMove = candles[i].high - candles[i - 1].high;
+    const downMove = candles[i - 1].low - candles[i].low;
+    const pDM = upMove > downMove && upMove > 0 ? upMove : 0;
+    const mDM = downMove > upMove && downMove > 0 ? downMove : 0;
+    if (i <= period) {
+      sTR += trs[i];
+      sPlus += pDM;
+      sMinus += mDM;
+      if (i < period) continue;
+    } else {
+      sTR = sTR - sTR / period + trs[i];
+      sPlus = sPlus - sPlus / period + pDM;
+      sMinus = sMinus - sMinus / period + mDM;
+    }
+    const pdi = sTR ? (100 * sPlus) / sTR : 0;
+    const mdi = sTR ? (100 * sMinus) / sTR : 0;
+    plusDI[i] = pdi;
+    minusDI[i] = mdi;
+    const d = pdi + mdi ? (100 * Math.abs(pdi - mdi)) / (pdi + mdi) : 0;
+    if (adxPrev == null) {
+      dx.push(d);
+      if (dx.length === period) {
+        adxPrev = dx.reduce((a, b) => a + b, 0) / period;
+        adxOut[i] = adxPrev;
+      }
+    } else {
+      adxPrev = (adxPrev * (period - 1) + d) / period;
+      adxOut[i] = adxPrev;
+    }
+  }
+  return { plusDI, minusDI, adx: adxOut };
+}
+
+/** Fast %K over `period`, smoothed by `smooth` (slow %K); %D = SMA of slow %K. */
 function stochastic(candles: Candle[], period = 14, smooth = 3) {
   const kRaw: Array<number | null> = Array(candles.length).fill(null);
   for (let i = period - 1; i < candles.length; i += 1) {
     const window = candles.slice(i - period + 1, i + 1);
     const highest = Math.max(...window.map((c) => c.high));
     const lowest = Math.min(...window.map((c) => c.low));
-    const denom = highest - lowest || 1e-9;
-    kRaw[i] = ((candles[i].close - lowest) / denom) * 100;
+    kRaw[i] = highest === lowest ? 50 : ((candles[i].close - lowest) / (highest - lowest)) * 100;
   }
-  const k = sma(
-    kRaw.map((v) => v ?? 0),
-    smooth,
-  );
-  const d = sma(
-    k.map((v) => v ?? 0),
-    smooth,
-  );
+  const k = smaNullable(kRaw, smooth);
+  const d = smaNullable(k, smooth);
   return { k, d };
+}
+
+/**
+ * Bars per year, inferred from candle spacing, so volatility is annualised correctly.
+ * Daily = 252, weekly = 52, intraday = 252 x bars per NSE session (6 h 15 m).
+ */
+export function barsPerYear(candles: Candle[]) {
+  const gaps: number[] = [];
+  for (let i = Math.max(1, candles.length - 60); i < candles.length; i += 1) gaps.push(candles[i].time - candles[i - 1].time);
+  if (!gaps.length) return 252;
+  const median = [...gaps].sort((a, b) => a - b)[Math.floor(gaps.length / 2)];
+  if (median >= 5 * 86400) return 52;
+  if (median >= 20 * 3600) return 252;
+  return 252 * Math.max(1, Math.round(22500 / median));
 }
 
 function last<T>(arr: Array<T | null | undefined>): T | null {
@@ -144,14 +226,12 @@ export function computeIndicators(candles: Candle[]): Indicators {
   const sd20 = stdev(closes, 20);
   const volSma = sma(volumes, 20);
   const stoch = stochastic(candles);
+  const dmi = adx(candles, 14);
 
   const macdLine: Array<number | null> = closes.map((_, i) =>
     ema12[i] != null && ema26[i] != null ? (ema12[i] as number) - (ema26[i] as number) : null,
   );
-  const macdSignal = ema(
-    macdLine.map((v) => v ?? 0),
-    9,
-  );
+  const macdSignal = ema(macdLine, 9);
   const macdHist: Array<number | null> = macdLine.map((v, i) =>
     v != null && macdSignal[i] != null ? v - (macdSignal[i] as number) : null,
   );
@@ -171,7 +251,7 @@ export function computeIndicators(candles: Candle[]): Indicators {
   const mean = volWindow.reduce((a, b) => a + b, 0) / Math.max(volWindow.length, 1);
   const variance =
     volWindow.reduce((a, b) => a + (b - mean) ** 2, 0) / Math.max(volWindow.length - 1, 1);
-  const realizedVol = Math.sqrt(variance) * Math.sqrt(252) * 100;
+  const realizedVol = Math.sqrt(variance) * Math.sqrt(barsPerYear(candles)) * 100;
 
   const lastAtr = last(atr14);
   const lastClose = last(closes);
@@ -194,8 +274,15 @@ export function computeIndicators(candles: Candle[]): Indicators {
     stochasticK: last(stoch.k),
     stochasticD: last(stoch.d),
     volumeSma: last(volSma),
-    volumeRatio:
-      last(volumes) && last(volSma) ? (last(volumes) as number) / (last(volSma) as number) : null,
+    // Relative volume: current bar vs the average of the 20 bars BEFORE it.
+    volumeRatio: (() => {
+      const prior = volumes.slice(-21, -1).filter((v) => v > 0);
+      const cur = volumes.at(-1) ?? 0;
+      return prior.length >= 10 && cur > 0 ? cur / (prior.reduce((a, b) => a + b, 0) / prior.length) : null;
+    })(),
+    adx: last(dmi.adx),
+    plusDI: last(dmi.plusDI),
+    minusDI: last(dmi.minusDI),
     realizedVol: Number.isFinite(realizedVol) ? realizedVol : null,
     series: {
       sma20: zipLine(times, sma20),

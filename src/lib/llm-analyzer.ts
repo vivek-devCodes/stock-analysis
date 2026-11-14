@@ -128,10 +128,11 @@ export type StockAnalysisContext = {
   quote: Quote;
   indicators: Indicators;
   news: NewsItem[];
+  /** 80% expected price range from recent volatility; it does not predict direction. */
   forecast: {
-    expectedChangePercent: number;
-    expectedPrice: number;
-    confidence: number;
+    rangeLow: number;
+    rangeHigh: number;
+    horizon: number;
   };
   insight: {
     recommendation: string;
@@ -142,6 +143,8 @@ export type StockAnalysisContext = {
     risks: string[];
     support: number[];
     resistance: number[];
+    /** Out-of-sample track record of this call type, in words (from the backtest). */
+    trackRecord: string;
   };
 };
 
@@ -206,8 +209,8 @@ ${market.sectorPerformance.map((s) => `- ${s.sector}: ${s.changePercent >= 0 ? "
 - Volume Ratio: ${s.indicators.volumeRatio?.toFixed(2) ?? "N/A"}x
 
 **Existing Model Analysis:**
-- Recommendation: ${s.insight.recommendation} (Score: ${s.insight.score}, Confidence: ${(s.insight.confidence * 100).toFixed(0)}%)
-- Forecast: ${s.forecast.expectedChangePercent >= 0 ? "+" : ""}${s.forecast.expectedChangePercent.toFixed(2)}% expected (Target: ₹${s.forecast.expectedPrice.toFixed(2)}, Confidence: ${(s.forecast.confidence * 100).toFixed(0)}%)
+- Rule-based setup: ${s.insight.recommendation} (score ${s.insight.score}). ${s.insight.trackRecord}
+- Expected ${s.forecast.horizon}-day range (80%, volatility-based, no direction): ₹${s.forecast.rangeLow.toFixed(2)} – ₹${s.forecast.rangeHigh.toFixed(2)}. Keep targets and stop-losses realistic relative to this range.
 - Support: ${s.insight.support.map((v) => `₹${v.toFixed(2)}`).join(", ") || "N/A"}
 - Resistance: ${s.insight.resistance.map((v) => `₹${v.toFixed(2)}`).join(", ") || "N/A"}
 - Bullish: ${s.insight.working.join("; ")}
@@ -238,8 +241,8 @@ Rules:
 - Short-term targets should be realistic (2-8% upside/downside)
 - Long-term picks must have strong fundamentals (reasonable P/E, good EPS growth, healthy balance sheet)
 - Be specific about risk levels — LOW, MEDIUM, or HIGH
-- Confidence should be 0-100 based on alignment of signals
-- Include at least 3 picks per category
+- Confidence (0-100) must NOT exceed the measured historical hit rate given for the setup; if the setup is marked Unproven, say so in the reasoning and keep confidence at or below that hit rate
+- Include up to 5 picks per category, and FEWER (or none) when no stock has a clear, well-supported case — never pad the list to reach a count
 - News sentiment should influence your analysis
 - Consider sector rotation and market breadth
 

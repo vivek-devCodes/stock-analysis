@@ -24,6 +24,8 @@ import { clsx } from "@/lib/format";
 import { MODE_INFO, MODES, type Mode, type ScreenPick, type ScreenResult } from "@/lib/modes";
 import { NAV_ITEMS } from "@/lib/nav";
 import { PageHeader } from "./shell/PageHeader";
+import { TermLabel } from "./TermLabel";
+import { TrackBadge } from "./TrackBadge";
 
 const INITIAL_SHOWN = 10;
 
@@ -249,6 +251,7 @@ function PickCard({ pick: p }: { pick: ScreenPick }) {
             <span className="font-semibold">{p.symbol.replace(/\.NS$/, "")}</span>
             <span className={clsx("rounded px-2 py-0.5 text-[11px] font-bold", ACTION_STYLE[p.action])}>{p.action}</span>
             <span className="text-[11px] text-muted">score {p.score > 0 ? `+${p.score}` : p.score}</span>
+            {p.action !== "WAIT" && <TrackBadge track={p.track} />}
           </div>
           <p className="truncate text-xs text-muted">
             {p.name} · {p.sector}
@@ -282,7 +285,7 @@ function PickCard({ pick: p }: { pick: ScreenPick }) {
       <div className="flex flex-wrap gap-1.5">
         {p.metrics.map((m) => (
           <span key={m.label} className="rounded-md bg-white/5 px-2 py-1 text-[11px]">
-            <span className="text-muted">{m.label} </span>
+            <TermLabel label={m.label} className="text-muted" />{" "}
             <span className={clsx(m.tone === "up" && "text-up", m.tone === "down" && "text-down", m.tone === "warn" && "text-warn")}>
               {m.value}
             </span>

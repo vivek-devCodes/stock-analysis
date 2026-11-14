@@ -8,6 +8,8 @@ import { PriceChart } from "@/components/PriceChart";
 import { clsx, formatNumber, formatPercent, formatPrice } from "@/lib/format";
 import type { AlertEvent, AlertRule, AnalyzeResponse, LiveQuote, SearchResult } from "@/lib/types";
 import { LiveBadge } from "./LiveBadge";
+import { TermLabel } from "./TermLabel";
+import { TrackBadge } from "./TrackBadge";
 
 const LIVE_POLL_MS = 10_000;
 import { ALERT_KEY, EVENT_KEY, loadJson, loadWatchlist, saveJson, saveWatchlist } from "@/lib/watchlist";
@@ -436,7 +438,7 @@ export function Dashboard({ initialSymbol }: { initialSymbol: string }) {
                 <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-7">
                   {metrics.map(([label, value]) => (
                     <div key={label} className="rounded-lg bg-white/3 px-2 py-1.5">
-                      <p className="text-[10px] uppercase tracking-wider text-muted">{label}</p>
+                      <p className="text-[10px] uppercase tracking-wider text-muted"><TermLabel label={label} /></p>
                       <p className="font-mono text-sm">{value}</p>
                     </div>
                   ))}
@@ -469,7 +471,7 @@ export function Dashboard({ initialSymbol }: { initialSymbol: string }) {
                           overlay === item ? "bg-white/10 text-foreground" : "text-muted hover:bg-white/5",
                         )}
                       >
-                        {item === "sma" ? "SMA 20/50" : item === "ema" ? "EMA 12" : item === "bb" ? "Bollinger" : "Forecast"}
+                        {item === "sma" ? "SMA 20/50" : item === "ema" ? "EMA 12" : item === "bb" ? "Bollinger" : "Expected range"}
                       </button>
                     ))}
                   </div>
@@ -563,36 +565,31 @@ export function Dashboard({ initialSymbol }: { initialSymbol: string }) {
           {data && (
             <>
               <section className="panel p-4">
-                <p className="text-[11px] font-semibold uppercase tracking-wider text-muted">Actionable insight</p>
+                <p className="text-[11px] font-semibold uppercase tracking-wider text-muted">Swing setup (1–2 weeks)</p>
                 <p className={clsx("mt-2 text-3xl font-semibold", toneClass(data.insight.recommendation).split(" ")[1])}>
                   {data.insight.recommendation}
                 </p>
                 <p className="mt-1 text-sm">{data.insight.headline}</p>
-                <div className="mt-3 h-2 overflow-hidden rounded-full bg-white/8">
-                  <div
-                    className="h-full bg-accent"
-                    style={{ width: `${Math.round(data.insight.confidence * 100)}%` }}
-                  />
-                </div>
-                <p className="mt-1 text-xs text-muted">
-                  Confidence {(data.insight.confidence * 100).toFixed(0)}% · technical score {data.insight.score}
-                </p>
+                <p className="mt-1 text-xs text-muted">Setup score {data.insight.score > 0 ? `+${data.insight.score}` : data.insight.score}</p>
+                {data.insight.recommendation !== "HOLD" && (
+                  <div className="mt-3">
+                    <TrackBadge track={data.insight.track} detailed />
+                  </div>
+                )}
               </section>
 
               <section className="panel p-4">
                 <p className="text-[11px] font-semibold uppercase tracking-wider text-muted">
-                  Forecast · {data.forecast.horizon} bars
+                  Expected range · next {data.forecast.horizon} bars
                 </p>
-                <p className="mt-2 font-mono text-2xl">
-                  {formatPrice(data.forecast.expectedPrice, data.quote.currency)}
+                <p className="mt-2 font-mono text-xl">
+                  <span className="text-down">{formatPrice(data.forecast.bandLow, data.quote.currency)}</span>
+                  <span className="text-muted"> – </span>
+                  <span className="text-up">{formatPrice(data.forecast.bandHigh, data.quote.currency)}</span>
                 </p>
-                <p className={data.forecast.expectedChangePercent >= 0 ? "text-up" : "text-down"}>
-                  {formatPercent(data.forecast.expectedChangePercent)} expected
-                </p>
-                <p className="mt-2 text-xs text-muted">
-                  Range {formatPrice(data.forecast.bandLow, data.quote.currency)} –{" "}
-                  {formatPrice(data.forecast.bandHigh, data.quote.currency)} · model confidence{" "}
-                  {(data.forecast.confidence * 100).toFixed(0)}%
+                <p className="mt-1 text-xs text-muted">
+                  ±{(((data.forecast.bandHigh / data.forecast.expectedPrice - 1) * 100)).toFixed(1)}% around today&apos;s price ·
+                  about 8 in 10 outcomes land inside it (measured 77–80%)
                 </p>
                 <p className="mt-3 text-[11px] leading-5 text-muted">{data.forecast.method}</p>
                 <p className="mt-2 text-[11px] text-warn">{data.forecast.disclaimer}</p>

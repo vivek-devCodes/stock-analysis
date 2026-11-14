@@ -1,10 +1,53 @@
+import calibration from "./calibration.json";
 import { pivotLevels } from "./indicators";
-import type { Candle, Indicators, Insight, NewsItem, Quote, Recommendation, Signal } from "./types";
+import type { Candle, Indicators, Insight, NewsItem, Quote, Recommendation, Signal, TrackRecord } from "./types";
 
-function scoreToRec(score: number): Recommendation {
-  if (score >= 18) return "BUY";
-  if (score <= -18) return "SELL";
-  return "HOLD";
+/**
+ * Swing-trading decision engine (1–2 week horizon).
+ *
+ * Backtesting the previous score showed short-term returns in large-cap NSE stocks MEAN-REVERT:
+ * "momentum" BUYs and "oversold" SELLs were wrong more often than right. So the rule is the
+ * classic trend-filter + pullback entry:
+ *   BUY   = long-term uptrend   AND short-term pullback      (buy weakness in a healthy trend)
+ *   SELL  = long-term downtrend AND short-term bounce        (sell strength in a weak trend)
+ *   HOLD  = everything else (mixed trend, chasing an extended move, shorting a washout)
+ * Confidence is the measured out-of-sample hit rate of that call (src/lib/calibration.json),
+ * not a made-up number.
+ */
+
+type Regime = "up" | "down" | "mixed";
+
+type CalStat = { n: number; hitRate: number; expectancy: number; profitFactor: number; edge: number; proven: boolean } | null;
+const CAL = calibration as unknown as {
+  horizonDays: number;
+  period: string | null;
+  buy: CalStat;
+  sell: CalStat;
+};
+
+function trackFor(rec: Recommendation): TrackRecord {
+  const c = rec === "BUY" ? CAL.buy : rec === "SELL" ? CAL.sell : null;
+  if (!c) {
+    return { status: "untested", hitRate: null, expectancy: null, profitFactor: null, edge: null, samples: 0, horizonDays: CAL.horizonDays, period: CAL.period };
+  }
+  return {
+    status: c.proven ? "proven" : "unproven",
+    hitRate: c.hitRate,
+    expectancy: c.expectancy,
+    profitFactor: c.profitFactor,
+    edge: c.edge,
+    samples: c.n,
+    horizonDays: CAL.horizonDays,
+    period: CAL.period,
+  };
+}
+
+function regimeOf(price: number, ind: Indicators): Regime {
+  const { sma50, sma200 } = ind;
+  if (sma50 == null || sma200 == null) return "mixed";
+  if (price > sma200 && sma50 > sma200) return "up";
+  if (price < sma200 && sma50 < sma200) return "down";
+  return "mixed";
 }
 
 export function buildInsight(
@@ -12,216 +55,155 @@ export function buildInsight(
   candles: Candle[],
   indicators: Indicators,
   news: NewsItem[],
-  expectedChangePercent: number,
 ): Insight {
   const price = quote.price;
+  const ind = indicators;
   const signals: Signal[] = [];
+  const risks: string[] = [];
+  const rsi = ind.rsi;
+  const regime = regimeOf(price, ind);
+
+  // Short-term position relative to the 20-day mean and the Bollinger bands.
+  const pullback = (rsi != null && rsi <= 45) || (ind.sma20 != null && price < ind.sma20);
+  const deepPullback = (rsi != null && rsi <= 35) || (ind.bbLower != null && price <= ind.bbLower);
+  const bounce = (rsi != null && rsi >= 55) || (ind.sma20 != null && price > ind.sma20);
+  const extended = (rsi != null && rsi >= 70) || (ind.bbUpper != null && price >= ind.bbUpper);
+  const washout = (rsi != null && rsi <= 25) || (ind.bbLower != null && price < ind.bbLower);
+
   let score = 0;
 
-  if (indicators.sma20 && indicators.sma50) {
-    if (price > indicators.sma20 && indicators.sma20 > indicators.sma50) {
-      score += 14;
-      signals.push({
-        id: "trend",
-        label: "Bullish",
-        tone: "bullish",
-        detail: "Price is above SMA20 and SMA20 is above SMA50.",
-      });
-    } else if (price < indicators.sma20 && indicators.sma20 < indicators.sma50) {
-      score -= 14;
-      signals.push({
-        id: "trend",
-        label: "Bearish",
-        tone: "bearish",
-        detail: "Price is below SMA20 and SMA20 is below SMA50.",
-      });
-    } else {
-      signals.push({
-        id: "trend",
-        label: "Neutral",
-        tone: "neutral",
-        detail: "Moving averages are mixed; trend is not aligned.",
-      });
+  // 1. Long-term regime (the trend filter).
+  if (regime === "up") {
+    score += 30;
+    signals.push({ id: "regime", label: "Uptrend", tone: "bullish", detail: "Price is above the 200-day average and the 50-day is above the 200-day (long-term uptrend)." });
+  } else if (regime === "down") {
+    score -= 30;
+    signals.push({ id: "regime", label: "Downtrend", tone: "bearish", detail: "Price is below the 200-day average and the 50-day is below the 200-day (long-term downtrend)." });
+  } else {
+    signals.push({ id: "regime", label: "Mixed trend", tone: "neutral", detail: "50/200-day averages disagree with price — no clear long-term trend." });
+  }
+
+  // 2. Short-term setup, judged relative to the regime.
+  if (regime === "up") {
+    if (deepPullback) {
+      score += 30;
+      signals.push({ id: "setup", label: "Deep pullback", tone: "bullish", detail: `Sharp dip inside an uptrend (RSI ${rsi?.toFixed(0) ?? "—"}) — historically the better entry.` });
+    } else if (pullback) {
+      score += 20;
+      signals.push({ id: "setup", label: "Pullback", tone: "bullish", detail: `Pulled back below its 20-day average / RSI ${rsi?.toFixed(0) ?? "—"} while the long-term trend is up.` });
+    } else if (extended) {
+      score -= 15;
+      signals.push({ id: "setup", label: "Extended", tone: "warning", detail: `Stretched above its range (RSI ${rsi?.toFixed(0) ?? "—"}) — wait for a pullback rather than chasing.` });
+    }
+  } else if (regime === "down") {
+    if (washout) {
+      score += 15;
+      signals.push({ id: "setup", label: "Washed out", tone: "warning", detail: `Deeply oversold (RSI ${rsi?.toFixed(0) ?? "—"}) — shorting here risks a sharp relief bounce.` });
+    } else if (extended) {
+      score -= 30;
+      signals.push({ id: "setup", label: "Rally into resistance", tone: "bearish", detail: `Bounced hard (RSI ${rsi?.toFixed(0) ?? "—"}) inside a downtrend — a typical sell-the-rally zone.` });
+    } else if (bounce) {
+      score -= 20;
+      signals.push({ id: "setup", label: "Relief bounce", tone: "bearish", detail: "Trading above its 20-day average while the long-term trend is down." });
+    }
+  } else if (rsi != null && (rsi >= 70 || rsi <= 30)) {
+    signals.push({ id: "setup", label: rsi >= 70 ? "Overbought" : "Oversold", tone: "warning", detail: `RSI ${rsi.toFixed(0)} with no clear trend — likely to revert, but no trend to trade with.` });
+  }
+
+  // 3. Trend strength (ADX/DMI) — confirms, never overrides.
+  if (ind.adx != null) {
+    const diUp = (ind.plusDI ?? 0) > (ind.minusDI ?? 0);
+    if (ind.adx >= 25 && regime !== "mixed" && diUp === (regime === "up")) {
+      score += regime === "up" ? 5 : -5;
+      signals.push({ id: "adx", label: `ADX ${ind.adx.toFixed(0)} trending`, tone: regime === "up" ? "bullish" : "bearish", detail: `ADX ${ind.adx.toFixed(0)} with ${diUp ? "+DI" : "−DI"} leading: the trend has strength.` });
+    } else if (ind.adx < 20) {
+      signals.push({ id: "adx", label: `ADX ${ind.adx.toFixed(0)} weak`, tone: "neutral", detail: `ADX ${ind.adx.toFixed(0)}: little trend strength, so ranges and false breakouts are more likely.` });
     }
   }
 
-  if (indicators.sma200) {
-    if (price > indicators.sma200) {
-      score += 8;
-      signals.push({
-        id: "regime",
-        label: "Above 200DMA",
-        tone: "bullish",
-        detail: "Longer-term trend filter is constructive.",
-      });
-    } else {
-      score -= 8;
-      signals.push({
-        id: "regime",
-        label: "Below 200DMA",
-        tone: "bearish",
-        detail: "Price is in a longer-term downtrend regime.",
-      });
-    }
-  }
-
-  if (indicators.rsi != null) {
-    if (indicators.rsi >= 70) {
-      score -= 10;
-      signals.push({
-        id: "rsi",
-        label: "Overbought",
-        tone: "warning",
-        detail: `RSI ${indicators.rsi.toFixed(1)} suggests stretched upside.`,
-      });
-    } else if (indicators.rsi <= 30) {
-      score += 8;
-      signals.push({
-        id: "rsi",
-        label: "Oversold",
-        tone: "warning",
-        detail: `RSI ${indicators.rsi.toFixed(1)} suggests stretched downside.`,
-      });
-    } else if (indicators.rsi >= 55) {
-      score += 6;
-      signals.push({
-        id: "rsi",
-        label: "RSI constructive",
-        tone: "bullish",
-        detail: `RSI ${indicators.rsi.toFixed(1)} is in a bullish mid-range.`,
-      });
-    } else if (indicators.rsi <= 45) {
-      score -= 6;
-      signals.push({
-        id: "rsi",
-        label: "RSI weak",
-        tone: "bearish",
-        detail: `RSI ${indicators.rsi.toFixed(1)} is in a bearish mid-range.`,
-      });
-    }
-  }
-
-  if (indicators.macdHistogram != null) {
-    if (indicators.macdHistogram > 0) {
-      score += 8;
-      signals.push({
-        id: "macd",
-        label: "MACD positive",
-        tone: "bullish",
-        detail: "MACD histogram is above zero, supporting momentum.",
-      });
-    } else {
-      score -= 8;
-      signals.push({
-        id: "macd",
-        label: "MACD negative",
-        tone: "bearish",
-        detail: "MACD histogram is below zero, momentum is fading.",
-      });
-    }
-  }
-
-  if (indicators.volumeRatio != null && indicators.volumeRatio > 1.6) {
+  // 4. MACD — shown for context; it lags, so it is not part of the decision.
+  if (ind.macdHistogram != null) {
     signals.push({
-      id: "volume",
-      label: "Volume spike",
-      tone: "warning",
-      detail: `Volume is ${indicators.volumeRatio.toFixed(1)}x the 20-period average.`,
-    });
-    score += quote.changePercent >= 0 ? 4 : -4;
-  }
-
-  if (indicators.realizedVol != null && indicators.realizedVol > 45) {
-    score -= 4;
-    signals.push({
-      id: "vol",
-      label: "High volatility",
-      tone: "warning",
-      detail: `Realized volatility is ${indicators.realizedVol.toFixed(1)}% annualized.`,
+      id: "macd",
+      label: ind.macdHistogram > 0 ? "MACD rising" : "MACD falling",
+      tone: "neutral",
+      detail: `MACD histogram ${ind.macdHistogram > 0 ? "above" : "below"} zero (short-term momentum ${ind.macdHistogram > 0 ? "improving" : "fading"}).`,
     });
   }
 
+  // 5. Headlines nudge only (keyword sentiment is a weak signal).
   const newsScore = news.reduce((sum, item) => sum + item.score, 0);
   if (newsScore > 1) {
-    score += 6;
-    signals.push({
-      id: "news",
-      label: "Positive news",
-      tone: "bullish",
-      detail: "Recent headlines lean constructive.",
-    });
+    score += 4;
+    signals.push({ id: "news", label: "Positive news", tone: "bullish", detail: "Recent headlines lean constructive." });
   } else if (newsScore < -1) {
-    score -= 6;
-    signals.push({
-      id: "news",
-      label: "Negative news",
-      tone: "bearish",
-      detail: "Recent headlines lean cautious.",
-    });
+    score -= 4;
+    signals.push({ id: "news", label: "Negative news", tone: "bearish", detail: "Recent headlines lean cautious — check for event risk." });
   }
 
-  if (expectedChangePercent > 1.5) score += 8;
-  else if (expectedChangePercent < -1.5) score -= 8;
+  // Risk notes (never change the call, but always shown).
+  if (ind.volumeRatio != null && ind.volumeRatio >= 2) risks.push(`Volume is ${ind.volumeRatio.toFixed(1)}× its 20-day average — a news or event-driven move.`);
+  if (ind.realizedVol != null && ind.realizedVol > 45) risks.push(`High volatility (${ind.realizedVol.toFixed(0)}% annualised) — size positions smaller.`);
+  if (quote.pe && quote.pe > 60) risks.push(`Rich valuation: trailing P/E ${quote.pe.toFixed(1)}.`);
 
   const { support, resistance } = pivotLevels(candles);
-  const recommendation = scoreToRec(score);
-  const confidence = Math.max(0.32, Math.min(0.86, 0.42 + Math.abs(score) / 90));
+  if (!support.length) risks.push("No nearby support level, so a breakdown could extend.");
+  if (resistance[0] && (resistance[0] - price) / price < 0.02) risks.push("Price is within 2% of resistance; a rejection is possible.");
 
-  const working: string[] = [];
-  const notWorking: string[] = [];
-  const risks: string[] = [];
+  // The call requires BOTH the trend filter and the setup (confluence), not just a high score.
+  let recommendation: Recommendation = "HOLD";
+  if (regime === "up" && pullback && !extended) recommendation = "BUY";
+  else if (regime === "down" && bounce && !washout) recommendation = "SELL";
 
-  signals
-    .filter((s) => s.tone === "bullish")
-    .forEach((s) => working.push(s.detail));
-  signals
-    .filter((s) => s.tone === "bearish")
-    .forEach((s) => notWorking.push(s.detail));
-  signals
-    .filter((s) => s.tone === "warning")
-    .forEach((s) => risks.push(s.detail));
+  score = Math.max(-100, Math.min(100, score));
+  const track = trackFor(recommendation);
+  // Confidence = measured out-of-sample hit rate of this call; 0.5 (a coin flip) when untested.
+  const confidence = track.hitRate ?? 0.5;
 
-  if (quote.pe && quote.pe > 45) {
-    risks.push(`Valuation is elevated with a trailing P/E of ${quote.pe.toFixed(1)}.`);
-  }
-  if (support.length === 0) {
-    risks.push("Nearby support is sparse, so a breakdown could extend.");
-  }
-  if (resistance[0] && (resistance[0] - price) / price < 0.02) {
-    risks.push("Price is close to resistance; a rejection is possible.");
-  }
-  if (!working.length) working.push("No strong bullish alignment across the primary trend filters.");
-  if (!notWorking.length) {
-    notWorking.push("No dominant bearish breakdown in the current indicator set.");
-  }
+  const working = signals.filter((s) => s.tone === "bullish").map((s) => s.detail);
+  const notWorking = signals.filter((s) => s.tone === "bearish").map((s) => s.detail);
+  risks.unshift(...signals.filter((s) => s.tone === "warning").map((s) => s.detail));
+  if (!working.length) working.push("No bullish trend-plus-pullback alignment right now.");
+  if (!notWorking.length) notWorking.push("No bearish trend-plus-bounce alignment right now.");
 
   const headline =
     recommendation === "BUY"
-      ? "Setup favors accumulation, with trend and momentum aligned."
+      ? "Buy-the-dip setup: long-term uptrend with a short-term pullback."
       : recommendation === "SELL"
-        ? "Setup favors caution or reduction; downside pressure is in control."
-        : "Setup is mixed. Wait for confirmation rather than forcing a directional bet.";
+        ? "Sell-the-rally setup: long-term downtrend with a short-term bounce."
+        : regime === "up" && extended
+          ? "Uptrend, but extended — wait for a pullback instead of chasing."
+          : regime === "down" && washout
+            ? "Downtrend, but washed out — avoid fresh shorts here."
+            : "No high-probability setup. Wait for trend and timing to line up.";
+
+  const trackText =
+    recommendation === "HOLD"
+      ? "HOLD means no setup — not a prediction that the price will stay flat."
+      : track.status === "untested"
+        ? "This call type has no backtest record yet."
+        : `Track record: right ${((track.hitRate ?? 0) * 100).toFixed(0)}% of the time over ${track.horizonDays} trading days, ${((track.expectancy ?? 0) * 100).toFixed(2)}% per trade after costs, ${track.samples} out-of-sample signals${track.period ? ` (${track.period})` : ""}. ${
+            track.status === "proven" ? "Proven: it beat the average stock after costs." : "Unproven: it did NOT beat the average stock after costs — treat it as a setup, not a prediction."
+          }`;
 
   return {
     recommendation,
+    track,
     score,
     confidence,
     headline,
-    summary: `${quote.symbol} is ${quote.changePercent >= 0 ? "up" : "down"} ${Math.abs(quote.changePercent).toFixed(2)}% with ${indicators.realizedVol?.toFixed(1) ?? "n/a"}% realized volatility. The ensemble model sees a ${expectedChangePercent >= 0 ? "modest upside" : "modest downside"} of ${expectedChangePercent.toFixed(2)}% over the next forecast window, with a ${recommendation} bias at ${(confidence * 100).toFixed(0)}% confidence.`,
+    summary: `${quote.symbol} is ${quote.changePercent >= 0 ? "up" : "down"} ${Math.abs(quote.changePercent).toFixed(2)}% today. Long-term trend: ${regime}. ${headline} ${trackText}`,
     working,
     notWorking,
     risks,
     support,
     resistance,
     reasoning: [
-      `Technical score is ${score > 0 ? "+" : ""}${score} from trend, RSI, MACD, volume, news, and forecast drift.`,
-      indicators.rsi != null
-        ? `RSI at ${indicators.rsi.toFixed(1)} ${indicators.rsi > 70 ? "is overbought" : indicators.rsi < 30 ? "is oversold" : "is mid-range"}.`
-        : "RSI is unavailable on this range.",
-      support[0]
-        ? `Closest support sits near ${support[0].toFixed(2)}; closest resistance near ${resistance[0]?.toFixed(2) ?? "n/a"}.`
-        : "Pivot clustering did not produce a clean nearby support.",
-      "This is a data-driven snapshot, not a personalised recommendation.",
+      `Trend filter: ${regime === "up" ? "uptrend" : regime === "down" ? "downtrend" : "mixed"} (price ${ind.sma200 ? (price > ind.sma200 ? "above" : "below") : "vs"} 200-DMA${ind.sma200 ? ` ${ind.sma200.toFixed(2)}` : ""}).`,
+      rsi != null ? `RSI(14) ${rsi.toFixed(1)}${ind.adx != null ? `, ADX ${ind.adx.toFixed(0)} (${ind.adx >= 25 ? "trending" : ind.adx < 20 ? "weak trend" : "moderate"})` : ""}.` : "RSI unavailable on this range.",
+      support[0] ? `Nearest support ${support[0].toFixed(2)}; nearest resistance ${resistance[0]?.toFixed(2) ?? "n/a"}.` : "No clean nearby support.",
+      trackText,
+      "Rule-based research, not personalised investment advice.",
     ],
     signals,
   };

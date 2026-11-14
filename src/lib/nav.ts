@@ -1,4 +1,5 @@
 import {
+  BookOpen,
   CandlestickChart,
   Clock,
   Filter,
@@ -41,7 +42,8 @@ export const NAV_GROUPS: Array<{ title: string; items: NavItem[] }> = [
     items: [
       { href: "/screener", label: "Stock Screener", icon: Filter, description: "Fundamentals: quality, growth and value", tone: "text-[#4fd1c5]" },
       { href: "/news", label: "Market News", icon: Newspaper, description: "Headlines from Indian financial media", tone: "text-[#f472b6]" },
-      { href: "/analyze", label: "Stock Analyzer", icon: CandlestickChart, description: "Live chart, indicators, forecast, watchlist and alerts", tone: "text-foreground" },
+      { href: "/glossary", label: "Glossary", icon: BookOpen, description: "Stock-market terms, formulas and definitions", tone: "text-[#fbbf24]" },
+      { href: "/analyze", label: "Stock Analyzer", icon: CandlestickChart, description: "Live chart, indicators, expected range, watchlist and alerts", tone: "text-foreground" },
     ],
   },
 ];

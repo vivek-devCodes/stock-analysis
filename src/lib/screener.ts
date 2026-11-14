@@ -4,7 +4,7 @@ import { buildForecast } from "./forecast";
 import { computeIndicators } from "./indicators";
 import { MODE_INFO, type Mode, type ScreenPick, type ScreenResult } from "./modes";
 import { getAllStocks, SECTORS } from "./stock-universe";
-import type { Candle, Quote } from "./types";
+import type { Candle, Quote, TrackRecord } from "./types";
 import { fetchChart } from "./yahoo";
 
 /* ------------------------------------------------------------------ */
@@ -49,11 +49,23 @@ function base(symbol: string, quote: Quote) {
 
 type Scan = { pick: ScreenPick; time: number };
 
+/** For desks whose rules have not been backtested yet. */
+const untested = (horizonDays: number): TrackRecord => ({
+  status: "untested",
+  hitRate: null,
+  expectancy: null,
+  profitFactor: null,
+  edge: null,
+  samples: 0,
+  horizonDays,
+  period: null,
+});
+
 /** Daily-candle trend engine shared by short-term and options. */
 function swingCore(quote: Quote, candles: Candle[]) {
   const ind = computeIndicators(candles);
   const fc = buildForecast(candles, ind, 10);
-  const insight = buildInsight(quote, candles, ind, [], fc.expectedChangePercent);
+  const insight = buildInsight(quote, candles, ind, []);
   return { ind, fc, insight };
 }
 
@@ -72,6 +84,16 @@ async function scanIntraday(symbol: string): Promise<Scan | null> {
   if (!session.length || !earlier.length) return null;
 
   const prevClose = earlier.at(-1)!.close;
+  // Previous session reference levels (PDH / PDL / PDC) and the Central Pivot Range (CPR):
+  // P = (H + L + C) / 3, BC = (H + L) / 2, TC = 2P - BC (TC/BC swapped so TC is the upper line).
+  const prevDay = earlier.filter((c) => istDay(c.time) === istDay(earlier.at(-1)!.time));
+  const pdh = Math.max(...prevDay.map((c) => c.high));
+  const pdl = Math.min(...prevDay.map((c) => c.low));
+  const pivot = (pdh + pdl + prevClose) / 3;
+  const bc = (pdh + pdl) / 2;
+  const tc = 2 * pivot - bc;
+  const cprTop = Math.max(tc, bc);
+  const cprBottom = Math.min(tc, bc);
   const price = quote.price || session.at(-1)!.close;
   const gap = pct(session[0].open, prevClose);
   const dayChange = pct(price, prevClose);
@@ -134,6 +156,10 @@ async function scanIntraday(symbol: string): Promise<Scan | null> {
     else if (ind.rsi <= 28) reasons.push(`RSI ${ind.rsi.toFixed(0)} — oversold, avoid chasing shorts`);
   }
   score += dayChange > 0 ? 10 : dayChange < 0 ? -10 : 0;
+  if (price > pdh) reasons.push(`Above previous day high ${pdh.toFixed(2)}`);
+  else if (price < pdl) reasons.push(`Below previous day low ${pdl.toFixed(2)}`);
+  if (price > cprTop) reasons.push(`Trading above the CPR (${cprBottom.toFixed(2)}–${cprTop.toFixed(2)})`);
+  else if (price < cprBottom) reasons.push(`Trading below the CPR (${cprBottom.toFixed(2)}–${cprTop.toFixed(2)})`);
   if (Math.abs(gap) >= 1) reasons.push(`Gapped ${gap > 0 ? "up" : "down"} ${Math.abs(gap).toFixed(2)}% at open`);
   if (relVol != null) {
     if (relVol >= 1.5) {
@@ -164,8 +190,11 @@ async function scanIntraday(symbol: string): Promise<Scan | null> {
       { label: "Rel. vol", value: relVol != null ? `${relVol.toFixed(1)}×` : "—", tone: relVol != null && relVol >= 1.5 ? "warn" : undefined },
       { label: "RSI 15m", value: ind.rsi != null ? ind.rsi.toFixed(0) : "—" },
       { label: "ATR 15m", value: ind.atrPercent != null ? `${ind.atrPercent.toFixed(2)}%` : "—" },
+      { label: "PDH / PDL", value: `${pdh.toFixed(1)} / ${pdl.toFixed(1)}` },
+      { label: "CPR", value: `${cprBottom.toFixed(1)}–${cprTop.toFixed(1)}`, tone: price > cprTop ? "up" : price < cprBottom ? "down" : undefined },
     ],
-    reasons: reasons.slice(0, 4),
+    reasons: reasons.slice(0, 5),
+    track: untested(0),
   };
   return { pick, time: lastTime };
 }
@@ -213,13 +242,14 @@ async function scanShortTerm(symbol: string): Promise<Scan | null> {
     targetLabel: "Target (1–2 wk)",
     stopLabel: "Stop loss",
     metrics: [
-      { label: "10D forecast", value: signed(fc.expectedChangePercent), tone: tone(fc.expectedChangePercent) },
+      { label: "10D range (80%)", value: `${fc.bandLow.toFixed(0)}–${fc.bandHigh.toFixed(0)}` },
       { label: "20D return", value: signed(ret20), tone: tone(ret20) },
       { label: "RSI", value: ind.rsi != null ? ind.rsi.toFixed(0) : "—" },
       { label: "ATR", value: ind.atrPercent != null ? `${ind.atrPercent.toFixed(2)}%` : "—" },
-      { label: "Confidence", value: `${Math.round(insight.confidence * 100)}%` },
+      { label: "ADX", value: ind.adx != null ? ind.adx.toFixed(0) : "—" },
     ],
     reasons: [...reasons.slice(0, 3), ...insight.risks.slice(0, 1)],
+    track: insight.track,
   };
   return { pick, time: candles.at(-1)!.time };
 }
@@ -303,6 +333,7 @@ async function scanLongTerm(symbol: string): Promise<Scan | null> {
       { label: "Volatility", value: ind.realizedVol != null ? `${ind.realizedVol.toFixed(0)}%` : "—" },
     ],
     reasons: reasons.slice(0, 4),
+    track: untested(60),
   };
   return { pick, time: candles.at(-1)!.time };
 }
@@ -331,8 +362,8 @@ async function scanOptions(symbol: string): Promise<Scan | null> {
   const price = quote.price;
   const score = Math.round(clamp(insight.score, -100, 100));
   const hist = ind.macdHistogram ?? 0;
-  // Option buyers pay time decay, so require a stronger, momentum-confirmed trend than the swing screen.
-  const bias = score >= 25 && hist > 0 ? "bullish" : score <= -25 && hist < 0 ? "bearish" : "neutral";
+  // Direction comes from the same swing engine (trend filter + pullback/bounce timing).
+  const bias = insight.recommendation === "BUY" ? "bullish" : insight.recommendation === "SELL" ? "bearish" : "neutral";
   const atr = ind.atr ?? price * 0.015;
   const step = strikeStep(symbol, price);
   const strike = Math.round(price / step) * step;
@@ -366,6 +397,7 @@ async function scanOptions(symbol: string): Promise<Scan | null> {
       { label: "ATR", value: ind.atrPercent != null ? `${ind.atrPercent.toFixed(2)}%` : "—" },
     ],
     reasons,
+    track: insight.track,
     option: bias === "neutral" ? undefined : { type: bias === "bullish" ? "CE" : "PE", strike, strikeStep: step, expiry },
   };
   return { pick, time: candles.at(-1)!.time };
