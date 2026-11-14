@@ -14,7 +14,9 @@
     "test:indicators": "tsx src/scripts/test-indicators.ts",
     "backtest": "tsx src/scripts/backtest.ts",
     "test:db": "tsx --tsconfig tsconfig.scripts.json src/scripts/test-db.ts",
-    "test:insights": "tsx --tsconfig tsconfig.scripts.json src/scripts/test-insights.ts"
+    "test:insights": "tsx --tsconfig tsconfig.scripts.json src/scripts/test-insights.ts",
+    "test:studies": "tsx --tsconfig tsconfig.scripts.json src/scripts/test-studies.ts",
+    "backtest:signals": "tsx --tsconfig tsconfig.scripts.json src/scripts/backtest-signals.ts"
   },
   "dependencies": {
     "@google/genai": "^2.30.0",

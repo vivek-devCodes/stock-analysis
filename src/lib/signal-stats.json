@@ -1,0 +1,47 @@
+{
+  "generatedAt": "2026-11-14T11:23:17.694Z",
+  "stocks": 68,
+  "costRoundTrip": 0.003,
+  "supertrend": {
+    "horizonDays": 10,
+    "period": "2025-03-02 to 2026-10-29",
+    "baselineMean": 0.0038,
+    "buy": {
+      "n": 396,
+      "hitRate": 0.5328,
+      "expectancy": 0.0019,
+      "profitFactor": 1.0955,
+      "edge": 0.0011,
+      "proven": false
+    },
+    "sell": {
+      "n": 389,
+      "hitRate": 0.4524,
+      "expectancy": -0.0033,
+      "profitFactor": 0.8608,
+      "edge": 0.0035,
+      "proven": false
+    }
+  },
+  "golden-cross": {
+    "horizonDays": 60,
+    "period": "2025-01-17 to 2026-08-17",
+    "baselineMean": 0.0131,
+    "buy": {
+      "n": 95,
+      "hitRate": 0.4737,
+      "expectancy": -0.0008,
+      "profitFactor": 0.9822,
+      "edge": -0.011,
+      "proven": false
+    },
+    "sell": {
+      "n": 90,
+      "hitRate": 0.3889,
+      "expectancy": -0.0344,
+      "profitFactor": 0.5095,
+      "edge": -0.0183,
+      "proven": false
+    }
+  }
+}

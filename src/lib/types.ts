@@ -155,6 +155,8 @@ export type AnalyzeResponse = {
     score: number;
   };
   provider: string;
+  /** Swing-engine BUY/SELL transitions (daily charts only), replayed walk-forward. */
+  engineSignals?: import("./chart-studies").ChartSignal[];
 };
 
 export type MarketIndex = {
