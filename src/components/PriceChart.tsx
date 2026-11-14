@@ -18,8 +18,8 @@ import {
   type UTCTimestamp,
 } from "lightweight-charts";
 import type { AnalyzeResponse, LiveQuote } from "@/lib/types";
-import { bollinger, crossSignals, donchian, ema, ichimoku, keltner, parabolicSar, sessionVwap, sma, supertrend, supertrendSignals, type ChartSignal, type Point } from "@/lib/chart-studies";
-import type { SignalId, StudyId } from "@/lib/chart-config";
+import { bollinger, donchian, ema, ichimoku, keltner, parabolicSar, sessionVwap, sma, supertrend, supertrendSignals, type ChartSignal, type Point } from "@/lib/chart-studies";
+import { SIGNAL_COLORS, type SignalId, type StudyId } from "@/lib/chart-config";
 
 const INTERVAL_SECONDS: Record<string, number> = { "5m": 300, "15m": 900, "1h": 3600, "1d": 86400, "1wk": 604800 };
 type Bar = { time: UTCTimestamp; open: number; high: number; low: number; close: number };
@@ -78,7 +78,7 @@ export function PriceChart({ data, studies, signals, live }: Props) {
     charts.current.forEach((c) => c.remove());
     charts.current = [];
 
-    const priceChart = makeChart(priceRef.current, 360, 18);
+    const priceChart = makeChart(priceRef.current, 420, 18);
     const rsiChart = makeChart(rsiRef.current, 110);
     const macdChart = makeChart(macdRef.current, 110);
     charts.current = [priceChart, rsiChart, macdChart];
@@ -105,9 +105,11 @@ export function PriceChart({ data, studies, signals, live }: Props) {
     const volume = priceChart.addSeries(HistogramSeries, {
       priceFormat: { type: "volume" },
       priceScaleId: "vol",
+      lastValueVisible: false,
+      priceLineVisible: false,
     });
     priceChart.priceScale("vol").applyOptions({
-      scaleMargins: { top: 0.78, bottom: 0 },
+      scaleMargins: { top: 0.84, bottom: 0 },
     });
     volume.setData(
       data.candles.map((c) => ({
@@ -140,13 +142,14 @@ export function PriceChart({ data, studies, signals, live }: Props) {
       return series;
     };
     const has = (id: StudyId) => studies.includes(id);
-    const c = data.candles;
+    // Indicators are computed on the warm-up history too, then drawn only on the visible candles.
+    const c = data.studyCandles?.length ? data.studyCandles : data.candles;
     const intraday = data.interval !== "1d" && data.interval !== "1wk";
 
     if (has("sma")) {
-      addLine("#5b8cff", sma(c, 20), { width: 2, lastValue: true });
-      addLine("#f5c542", sma(c, 50), { width: 2, lastValue: true });
-      addLine("#f472b6", sma(c, 200), { width: 2, lastValue: true });
+      addLine("#5b8cff", sma(c, 20), { width: 2 });
+      addLine("#f5c542", sma(c, 50), { width: 2 });
+      addLine("#f472b6", sma(c, 200), { width: 2 });
     }
     if (has("ema-ribbon")) {
       addLine("#22d3ee", ema(c, 9));
@@ -184,7 +187,7 @@ export function PriceChart({ data, studies, signals, live }: Props) {
       addLine("rgba(255,92,122,0.8)", ic.spanB, { extendFuture: true });
       addLine("rgba(167,139,250,0.6)", ic.lagging, { dashed: true });
     }
-    if (has("vwap") && intraday) addLine("#facc15", sessionVwap(c), { width: 2, lastValue: true });
+    if (has("vwap") && intraday) addLine("#facc15", sessionVwap(c), { width: 2 });
     if (has("levels")) {
       data.insight.support.slice(0, 2).forEach((price, i) =>
         candles.createPriceLine({ price, color: "#3dd68c", lineWidth: 1, lineStyle: LineStyle.Dashed, axisLabelVisible: true, title: `S${i + 1}` }),
@@ -202,11 +205,11 @@ export function PriceChart({ data, studies, signals, live }: Props) {
 
     // BUY / SELL markers on the candles.
     const marks: ChartSignal[] = [];
-    if (signals.includes("engine")) marks.push(...(data.engineSignals ?? []));
+    const daily = data.dailySignals ?? [];
+    if (signals.includes("engine")) marks.push(...daily.filter((m) => m.source === "engine"));
     if (signals.includes("supertrend")) marks.push(...supertrendSignals(c));
-    if (signals.includes("golden-cross") && !intraday) marks.push(...crossSignals(c));
+    if (signals.includes("golden-cross")) marks.push(...daily.filter((m) => m.source === "golden-cross"));
     const inRange = new Set(times);
-    const colour = { engine: { buy: "#3dd68c", sell: "#ff5c7a" }, supertrend: { buy: "#22d3ee", sell: "#fb923c" }, "golden-cross": { buy: "#facc15", sell: "#e879f9" } } as const;
     const markers: SeriesMarker<Time>[] = marks
       .filter((m) => inRange.has(m.time))
       .sort((x, y) => x.time - y.time)
@@ -214,9 +217,10 @@ export function PriceChart({ data, studies, signals, live }: Props) {
         time: toTime(m.time),
         position: m.side === "buy" ? "belowBar" : "aboveBar",
         shape: m.side === "buy" ? "arrowUp" : "arrowDown",
-        color: colour[m.source][m.side],
-        text: m.label,
-        size: m.source === "engine" ? 1.2 : 1,
+        color: SIGNAL_COLORS[m.source][m.side],
+        // Every marker says what it is; the colour (see legend) says which rule fired it.
+        text: m.source === "golden-cross" ? (m.side === "buy" ? "GC" : "DC") : m.side === "buy" ? "BUY" : "SELL",
+        size: 1.6,
       }));
     if (markers.length) createSeriesMarkers(candles, markers);
 

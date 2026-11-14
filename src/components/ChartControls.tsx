@@ -2,7 +2,7 @@
 
 import { ChevronDown, FlaskConical, LineChart, Signal } from "lucide-react";
 import { useState } from "react";
-import { SIGNALS, STUDIES, type SignalId, type StudyId } from "@/lib/chart-config";
+import { SIGNAL_COLORS, SIGNALS, STUDIES, type SignalId, type StudyId } from "@/lib/chart-config";
 import { clsx } from "@/lib/format";
 
 const pct = (x: number | undefined | null, d = 0) => (x == null ? "—" : `${(x * 100).toFixed(d)}%`);
@@ -70,10 +70,9 @@ export function ChartControls({
             </p>
             <div className="space-y-1.5">
               {SIGNALS.map((s) => {
-                const disabled = s.dailyOnly && intraday;
                 return (
-                  <label key={s.id} className={clsx("flex items-start gap-2", disabled && "opacity-40")} title={s.hint}>
-                    <input type="checkbox" className="mt-0.5" checked={signals.includes(s.id)} disabled={disabled} onChange={() => onSignals(toggle(signals, s.id))} />
+                  <label key={s.id} className="flex items-start gap-2" title={s.hint}>
+                    <input type="checkbox" className="mt-0.5" checked={signals.includes(s.id)} onChange={() => onSignals(toggle(signals, s.id))} />
                     <span>
                       <span className="font-medium text-foreground">{s.label}</span>
                       <span className="block text-[11px] text-muted">{s.hint}</span>
@@ -90,8 +89,8 @@ export function ChartControls({
 }
 
 /** Track record of each active marker type, so a marker is never mistaken for a guarantee. */
-export function SignalLegend({ signals, intraday }: { signals: SignalId[]; intraday: boolean }) {
-  const active = SIGNALS.filter((s) => signals.includes(s.id) && !(s.dailyOnly && intraday));
+export function SignalLegend({ signals }: { signals: SignalId[] }) {
+  const active = SIGNALS.filter((s) => signals.includes(s.id));
   if (!active.length) return null;
   return (
     <div className="mt-2 space-y-1 rounded-lg border border-line bg-[#0b1016] p-2 text-[11px]">
@@ -100,7 +99,13 @@ export function SignalLegend({ signals, intraday }: { signals: SignalId[]; intra
       </p>
       {active.map((s) => (
         <p key={s.id} className="text-foreground/85">
+          <span className="mr-1 font-mono" aria-hidden>
+            <span style={{ color: SIGNAL_COLORS[s.id].buy }}>▲</span>
+            <span style={{ color: SIGNAL_COLORS[s.id].sell }}>▼</span>
+          </span>
           <span className="font-medium">{s.label}</span>
+          {s.id === "engine" && <span className="text-muted"> (B / S)</span>}
+          {s.id === "golden-cross" && <span className="text-muted"> (GC / DC)</span>}
           {s.track ? (
             <>
               {" "}

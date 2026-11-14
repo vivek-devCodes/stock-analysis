@@ -15,14 +15,24 @@ function quoteAt(symbol: string, c: Candle[], i: number): Quote {
   };
 }
 
+/** A repeat signal in the same direction within this many bars is not drawn again (declutters the chart). */
+const MIN_GAP_BARS = 15;
+
 /** Engine BUY/SELL transitions within [fromTime, last bar]. Needs ~210 daily bars of warm-up. */
 export function engineSignals(symbol: string, daily: Candle[], fromTime: number): ChartSignal[] {
   const out: ChartSignal[] = [];
   let prev: string | null = null;
+  let lastSide: string | null = null;
+  let lastIdx = -Infinity;
   for (let i = 210; i < daily.length; i += 1) {
     const slice = daily.slice(Math.max(0, i - 299), i + 1);
     const rec = buildInsight(quoteAt(symbol, daily, i), slice, computeIndicators(slice), []).recommendation;
-    if (daily[i].time >= fromTime && rec !== prev && rec !== "HOLD") {
+    const fresh = rec !== lastSide || i - lastIdx >= MIN_GAP_BARS;
+    if (rec !== prev && rec !== "HOLD" && fresh) {
+      lastSide = rec;
+      lastIdx = i;
+    }
+    if (daily[i].time >= fromTime && rec !== prev && rec !== "HOLD" && lastIdx === i) {
       out.push({
         time: daily[i].time,
         side: rec === "BUY" ? "buy" : "sell",
