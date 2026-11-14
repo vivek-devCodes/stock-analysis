@@ -1,3 +1,5 @@
+import type { TrackRecord } from "./types";
+
 // Dashboard modes. Shared by the hub, the mode dashboards and /api/screener,
 // so keep this file free of server-only imports.
 
@@ -90,6 +92,8 @@ export type ScreenPick = {
   reasons: string[];
   /** Options mode only. */
   option?: { type: "CE" | "PE"; strike: number; strikeStep: number; expiry: string };
+  /** Out-of-sample backtest record for this kind of call ("untested" when the desk has none). */
+  track: TrackRecord;
 };
 
 export type ScreenResult = {

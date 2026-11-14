@@ -15,6 +15,7 @@ export type Fundamentals = {
   roe: number | null;
   roa: number | null;
   debtToEquity: number | null;
+  /** Latest quarter vs the same quarter last year (YoY), as reported by Yahoo. */
   revenueGrowth: number | null;
   earningsGrowth: number | null;
   operatingMargin: number | null;
@@ -22,6 +23,11 @@ export type Fundamentals = {
   dividendYield: number | null;
   currentRatio: number | null;
   insiderHolding: number | null;
+  /** TTM operating and free cash flow, ₹ crore. */
+  operatingCashFlowCr: number | null;
+  freeCashFlowCr: number | null;
+  /** Book value per share; negative = negative net worth. */
+  bookValuePerShare: number | null;
   fromHigh52: number | null;
   scores: { quality: number; growth: number; value: number; overall: number };
   flags: string[];
@@ -79,10 +85,17 @@ function scoreStock(f: Omit<Fundamentals, "scores" | "flags">, financial: boolea
 
   const flags: string[] = [];
   if (!financial && de != null && de > 1) flags.push("High debt");
+  // A high ROE can come from leverage rather than a better business (DuPont: ROE = margin × turnover × leverage).
+  if (!financial && roe != null && roe >= 20 && de != null && de > 1) flags.push("ROE boosted by debt");
   if (eg != null && eg < 0) flags.push("Earnings falling");
   if (rg != null && rg < 0) flags.push("Revenue falling");
   if (pe != null && pe > 60) flags.push("Expensive (P/E > 60)");
   if (pe != null && pe <= 0) flags.push("Loss-making");
+  // Glossary §23 red flags we can detect from the data we have. For banks/NBFCs operating cash
+  // flow swings with lending and deposits, so it is not a meaningful warning there.
+  if (!financial && f.operatingCashFlowCr != null && f.operatingCashFlowCr < 0) flags.push("Negative operating cash flow");
+  if (!financial && f.freeCashFlowCr != null && f.freeCashFlowCr < 0) flags.push("Negative free cash flow");
+  if (f.bookValuePerShare != null && f.bookValuePerShare < 0) flags.push("Negative net worth");
   if (f.fromHigh52 != null && f.fromHigh52 >= -3) flags.push("Near 52W high");
   return { scores: { quality, growth, value, overall }, flags };
 }
@@ -122,9 +135,14 @@ async function loadOne(symbol: string): Promise<Fundamentals | null> {
     dividendYield: pct(raw(sd.dividendYield)),
     currentRatio: round(raw(fd.currentRatio), 2),
     insiderHolding: pct(raw(ks.heldPercentInsiders)),
+    operatingCashFlowCr: (() => { const v = raw(fd.operatingCashflow); return v == null ? null : Math.round(v / 1e7); })(),
+    freeCashFlowCr: (() => { const v = raw(fd.freeCashflow); return v == null ? null : Math.round(v / 1e7); })(),
+    bookValuePerShare: round(raw(ks.bookValue), 2),
     fromHigh52: last != null && high ? round(((last - high) / high) * 100, 1) : null,
   };
-  return { ...base, ...scoreStock(base, FINANCIAL_SECTORS.has(sector)) };
+  // Banks/NBFCs: our sector map says "Banking"/"Finance"; Yahoo says "Financial Services" (e.g. Shriram Finance).
+  const financial = FINANCIAL_SECTORS.has(sector) || ap.sector === "Financial Services";
+  return { ...base, ...scoreStock(base, financial) };
 }
 
 async function crawlAll(): Promise<FundamentalsSnapshot> {

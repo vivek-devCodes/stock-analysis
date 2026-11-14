@@ -69,6 +69,10 @@ export type Indicators = {
   volumeSma: number | null;
   volumeRatio: number | null;
   realizedVol: number | null;
+  /** Wilder ADX (trend strength 0-100) and directional indicators. */
+  adx: number | null;
+  plusDI: number | null;
+  minusDI: number | null;
   series: {
     sma20: Array<{ time: number; value: number }>;
     sma50: Array<{ time: number; value: number }>;
@@ -88,8 +92,23 @@ export type Signal = {
 
 export type Recommendation = "BUY" | "SELL" | "HOLD";
 
+/** Out-of-sample backtest record of the call type (see src/scripts/backtest.ts). */
+export type TrackRecord = {
+  status: "proven" | "unproven" | "untested";
+  hitRate: number | null;
+  /** Average return per trade after costs (fraction). */
+  expectancy: number | null;
+  profitFactor: number | null;
+  /** Return vs the average stock over the same days (fraction, before costs). */
+  edge: number | null;
+  samples: number;
+  horizonDays: number;
+  period: string | null;
+};
+
 export type Insight = {
   recommendation: Recommendation;
+  track: TrackRecord;
   score: number;
   confidence: number;
   headline: string;

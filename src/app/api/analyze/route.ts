@@ -26,7 +26,7 @@ export async function GET(request: NextRequest) {
     const indicators = computeIndicators(candles);
     const horizon = range === "1d" || range === "5d" ? 12 : 10;
     const forecast = buildForecast(candles, indicators, horizon);
-    const insight = buildInsight(quote, candles, indicators, news, forecast.expectedChangePercent);
+    const insight = buildInsight(quote, candles, indicators, news);
 
     return Response.json({
       quote,

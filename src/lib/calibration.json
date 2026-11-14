@@ -1,0 +1,41 @@
+{
+  "note": "Out-of-sample (test period) results of the daily BUY/SELL engine, from src/scripts/backtest.ts. Trade return = +fwd for BUY, -fwd for SELL, net of round-trip costs. edge = vs the average stock, before costs.",
+  "generatedAt": "2026-11-14T09:07:17.171Z",
+  "horizonDays": 10,
+  "costRoundTrip": 0.003,
+  "stocks": 68,
+  "period": "2025-03-07 to 2026-10-29",
+  "provenRule": {
+    "minN": 200,
+    "minHit": 0.55,
+    "minProfitFactor": 1.1
+  },
+  "buy": {
+    "n": 4597,
+    "hitRate": 0.4612,
+    "expectancy": -0.0033,
+    "profitFactor": 0.835,
+    "payoffRatio": 0.9756,
+    "edge": -0.0038,
+    "proven": false
+  },
+  "sell": {
+    "n": 4761,
+    "hitRate": 0.4562,
+    "expectancy": -0.0072,
+    "profitFactor": 0.7155,
+    "payoffRatio": 0.8529,
+    "edge": -0.0007,
+    "proven": false
+  },
+  "baseline": {
+    "n": 26759,
+    "pctUp": 0.5107,
+    "mean": 0.0035
+  },
+  "caveats": [
+    "Universe = today's large caps (survivorship bias: delisted stocks are missing).",
+    "Daily samples overlap, so results are autocorrelated; treat as indicative.",
+    "Past behaviour does not guarantee future results."
+  ]
+}

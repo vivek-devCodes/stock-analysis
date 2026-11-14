@@ -144,8 +144,9 @@ export async function searchSymbols(query: string): Promise<SearchResult[]> {
     }));
 }
 
-export async function fetchChart(symbol: string, range = "1y") {
-  const { interval } = RANGE_INTERVAL[range] ?? RANGE_INTERVAL["1y"];
+/** `intervalOverride` lets research scripts request e.g. 5 years of DAILY candles. */
+export async function fetchChart(symbol: string, range = "1y", intervalOverride?: "1d" | "1wk") {
+  const interval = intervalOverride ?? (RANGE_INTERVAL[range] ?? RANGE_INTERVAL["1y"]).interval;
   const encoded = encodeURIComponent(symbol);
   const data = (await fetchJson(
     YAHOO_CHART.map(

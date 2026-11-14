@@ -23,6 +23,7 @@ import {
 import { useEffect, useMemo, useState } from "react";
 import { clsx } from "@/lib/format";
 import { PageHeader } from "./shell/PageHeader";
+import { TermHelp } from "./TermLabel";
 
 type F = {
   symbol: string;
@@ -68,8 +69,8 @@ const COLS: Col[] = [
   { key: "pb", label: "P/B", get: (f) => f.pb, fmt: (v) => v.toFixed(2) },
   { key: "roe", label: "ROE", get: (f) => f.roe, fmt: p1, good: (v) => (v >= 15 ? true : v < 8 ? false : null) },
   { key: "de", label: "Debt/Eq", get: (f) => f.debtToEquity, fmt: (v) => v.toFixed(2), good: (v) => (v <= 0.5 ? true : v > 1 ? false : null) },
-  { key: "rg", label: "Rev gr.", get: (f) => f.revenueGrowth, fmt: p1, good: (v) => (v >= 10 ? true : v < 0 ? false : null) },
-  { key: "eg", label: "EPS gr.", get: (f) => f.earningsGrowth, fmt: p1, good: (v) => (v >= 10 ? true : v < 0 ? false : null) },
+  { key: "rg", label: "Rev YoY (Q)", get: (f) => f.revenueGrowth, fmt: p1, good: (v) => (v >= 10 ? true : v < 0 ? false : null) },
+  { key: "eg", label: "EPS YoY (Q)", get: (f) => f.earningsGrowth, fmt: p1, good: (v) => (v >= 10 ? true : v < 0 ? false : null) },
   { key: "nm", label: "Net margin", get: (f) => f.netMargin, fmt: p1 },
   { key: "dy", label: "Div yield", get: (f) => f.dividendYield, fmt: (v) => `${v.toFixed(2)}%` },
   { key: "ins", label: "Promoter*", get: (f) => f.insiderHolding, fmt: p1 },
@@ -219,7 +220,8 @@ export function StockScreener() {
                         <button onClick={() => toggleSort(c.key)} className="inline-flex items-center gap-0.5 hover:text-foreground">
                           {c.label}
                           {sort.key === c.key && (sort.dir === -1 ? <ArrowDown className="h-3 w-3" /> : <ArrowUp className="h-3 w-3" />)}
-                        </button>
+                        </button>{" "}
+                        <TermHelp label={c.label} />
                       </th>
                     ))}
                     <th className="px-3 py-2 font-medium">Links</th>
@@ -279,7 +281,7 @@ export function StockScreener() {
               </table>
             </div>
             <p className="text-[11px] text-muted">
-              Score = 45% quality (ROE, debt, margins) + 30% growth (revenue, earnings) + 25% value (P/E, P/B, dividend). Debt/equity is
+              Score = 45% quality (ROE, debt, margins) + 30% growth (revenue, earnings — latest quarter vs the same quarter last year) + 25% value (P/E, P/B, dividend). ROE is TTM net income ÷ equity; a high ROE with debt/equity above 1 is flagged because leverage can inflate it. Debt/equity is
               ignored for banks and NBFCs. *Promoter = insider holding as reported by Yahoo. Missing data is not penalised. Not investment advice.
             </p>
           </>

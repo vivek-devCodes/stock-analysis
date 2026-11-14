@@ -60,7 +60,7 @@ async function analyzeStock(symbol: string): Promise<StockAnalysisContext | null
     const [quote, news] = await Promise.all([enrichQuote(rawQuote), fetchNews(symbol, rawQuote.name)]);
     const indicators = computeIndicators(candles);
     const forecast = buildForecast(candles, indicators, 10);
-    const insight = buildInsight(quote, candles, indicators, news, forecast.expectedChangePercent);
+    const insight = buildInsight(quote, candles, indicators, news);
 
     return {
       symbol,
@@ -68,9 +68,9 @@ async function analyzeStock(symbol: string): Promise<StockAnalysisContext | null
       indicators,
       news,
       forecast: {
-        expectedChangePercent: forecast.expectedChangePercent,
-        expectedPrice: forecast.expectedPrice,
-        confidence: forecast.confidence,
+        rangeLow: forecast.bandLow,
+        rangeHigh: forecast.bandHigh,
+        horizon: forecast.horizon,
       },
       insight: {
         recommendation: insight.recommendation,
@@ -81,6 +81,12 @@ async function analyzeStock(symbol: string): Promise<StockAnalysisContext | null
         risks: insight.risks,
         support: insight.support,
         resistance: insight.resistance,
+        trackRecord:
+          insight.recommendation === "HOLD"
+            ? "No setup."
+            : insight.track.status === "untested"
+              ? "Untested setup."
+              : `${insight.track.status === "proven" ? "Proven" : "Unproven"} setup: historically right ${Math.round((insight.track.hitRate ?? 0) * 100)}% of the time over ${insight.track.horizonDays} trading days, ${((insight.track.expectancy ?? 0) * 100).toFixed(2)}% per trade after costs.`,
       },
     };
   } catch (error) {
@@ -162,8 +168,8 @@ function toWatchlistEntry(a: StockAnalysisContext): WatchlistEntry {
     score: a.insight.score,
     confidence: Math.round(a.insight.confidence * 100), // insight.confidence is 0–1
     rsi: a.indicators.rsi,
-    forecastChangePercent: a.forecast.expectedChangePercent,
-    forecastPrice: a.forecast.expectedPrice,
+    rangeLow: a.forecast.rangeLow,
+    rangeHigh: a.forecast.rangeHigh,
     support: below.length ? Math.max(...below) : null,
     resistance: above.length ? Math.min(...above) : null,
     signals: a.insight.working,

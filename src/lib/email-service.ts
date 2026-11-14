@@ -97,7 +97,7 @@ function buildPlainText(report: DailyReport): string {
     lines.push(`=== YOUR WATCHLIST ===`);
     report.watchlist.forEach((w) => {
       lines.push(`${w.recommendation} ${w.symbol} (${w.name}) — ${w.currency} ${w.price.toFixed(2)} (${w.changePercent >= 0 ? "+" : ""}${w.changePercent.toFixed(2)}%)`);
-      lines.push(`  Forecast: ${w.forecastChangePercent >= 0 ? "+" : ""}${w.forecastChangePercent.toFixed(2)}% → ${w.forecastPrice.toFixed(2)} | Support ${w.support?.toFixed(2) ?? "—"} | Resistance ${w.resistance?.toFixed(2) ?? "—"}`);
+      lines.push(`  10-day range (80%): ${w.rangeLow.toFixed(2)} – ${w.rangeHigh.toFixed(2)} | Support ${w.support?.toFixed(2) ?? "—"} | Resistance ${w.resistance?.toFixed(2) ?? "—"}`);
       w.news.slice(0, 2).forEach((n) => lines.push(`  • ${n.title} (${n.publisher})`));
       lines.push(``);
     });
