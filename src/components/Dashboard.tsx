@@ -1,24 +1,18 @@
 "use client";
 
-import { Bell, Loader2, LogOut, Mail, Plus, Search, Sparkles, Star, Trash2, TrendingDown, TrendingUp, X } from "lucide-react";
+import { Bell, Loader2, Mail, Plus, Search, Sparkles, Star, Trash2, TrendingDown, TrendingUp, X } from "lucide-react";
+import { INDEX_LABELS, useMarket } from "./shell/market-store";
 import { WatchlistAdder } from "./WatchlistAdder";
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PriceChart } from "@/components/PriceChart";
 import { clsx, formatNumber, formatPercent, formatPrice } from "@/lib/format";
-import type { AlertEvent, AlertRule, AnalyzeResponse, MarketIndex, SearchResult } from "@/lib/types";
+import type { AlertEvent, AlertRule, AnalyzeResponse, LiveQuote, SearchResult } from "@/lib/types";
+import { LiveBadge } from "./LiveBadge";
+
+const LIVE_POLL_MS = 10_000;
 import { ALERT_KEY, EVENT_KEY, loadJson, loadWatchlist, saveJson, saveWatchlist } from "@/lib/watchlist";
 
 const RANGES = ["1d", "5d", "1mo", "3mo", "6mo", "1y", "2y", "5y"] as const;
-const INDEX_LABELS: Record<string, string> = {
-  "^NSEI": "Nifty 50",
-  "^BSESN": "Sensex",
-  "^NSEBANK": "Bank Nifty",
-  "^GSPC": "S&P 500",
-  "^IXIC": "Nasdaq",
-  "^DJI": "Dow",
-  "BTC-USD": "Bitcoin",
-};
-
 function toneClass(tone: string) {
   if (tone === "bullish" || tone === "BUY" || tone === "positive" || tone === "up") {
     return "bg-up/15 text-up";
@@ -39,7 +33,8 @@ export function Dashboard({ initialSymbol }: { initialSymbol: string }) {
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
-  const [indices, setIndices] = useState<MarketIndex[]>([]);
+  const [live, setLive] = useState<LiveQuote | null>(null);
+  const { quotes: marketQuotes } = useMarket();
   const [watchlist, setWatchlist] = useState<string[]>(loadWatchlist);
   const [alerts, setAlerts] = useState<AlertRule[]>([]);
   const [events, setEvents] = useState<AlertEvent[]>([]);
@@ -56,9 +51,12 @@ export function Dashboard({ initialSymbol }: { initialSymbol: string }) {
     setEvents(loadJson<AlertEvent[]>(EVENT_KEY, []));
   }, []);
 
-  const load = useCallback(async (sym: string, rng: string) => {
-    setLoading(true);
-    setError(null);
+  /** silent = background refresh: no spinner, and keep the current data if it fails. */
+  const load = useCallback(async (sym: string, rng: string, silent = false) => {
+    if (!silent) {
+      setLoading(true);
+      setError(null);
+    }
     try {
       const res = await fetch(`/api/analyze?symbol=${encodeURIComponent(sym)}&range=${rng}`);
       const json = await res.json();
@@ -69,27 +67,41 @@ export function Dashboard({ initialSymbol }: { initialSymbol: string }) {
       url.searchParams.set("symbol", json.quote.symbol);
       window.history.replaceState({}, "", url);
     } catch (err) {
+      if (silent) return;
       setError(err instanceof Error ? err.message : "Unable to load symbol");
       setData(null);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
     void load(symbol, range);
+    // Re-pull candles + indicators in the background: often for intraday ranges, rarely otherwise.
+    const every = range === "1d" || range === "5d" ? 2 * 60_000 : 10 * 60_000;
+    const id = window.setInterval(() => {
+      if (document.visibilityState === "visible") void load(symbol, range, true);
+    }, every);
+    return () => window.clearInterval(id);
   }, [load, symbol, range]);
 
+  // Live price for the open symbol every 10 s; it moves the header price and the last candle.
   useEffect(() => {
+    let cancelled = false;
     const tick = async () => {
-      const res = await fetch("/api/market");
-      const json = await res.json();
-      if (json.indices) setIndices(json.indices);
+      if (document.visibilityState !== "visible") return;
+      const res = await fetch(`/api/live?symbols=${encodeURIComponent(symbol)}`).catch(() => null);
+      const json = res?.ok ? await res.json() : null;
+      const q = (json?.quotes as LiveQuote[] | undefined)?.[0];
+      if (!cancelled && q) setLive(q);
     };
     void tick();
-    const id = window.setInterval(tick, 60_000);
-    return () => window.clearInterval(id);
-  }, []);
+    const id = window.setInterval(tick, LIVE_POLL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [symbol]);
 
   useEffect(() => {
     if (!query.trim()) {
@@ -215,7 +227,10 @@ export function Dashboard({ initialSymbol }: { initialSymbol: string }) {
   };
 
   const quote = data?.quote;
-  const up = (quote?.changePercent ?? 0) >= 0;
+  // Only trust a live tick for the symbol that's on screen.
+  const liveQuote = live && quote && live.symbol === quote.symbol ? live : null;
+  const shown = liveQuote ?? quote ?? { price: 0, change: 0, changePercent: 0 };
+  const up = shown.changePercent >= 0;
 
   const metrics = useMemo(() => {
     if (!data) return [];
@@ -238,30 +253,26 @@ export function Dashboard({ initialSymbol }: { initialSymbol: string }) {
   }, [data]);
 
   return (
-    <div className="min-h-screen">
-      <div className="border-b border-line bg-[#0b1016]">
-        <div className="flex gap-6 overflow-x-auto px-4 py-2 text-xs">
-          {indices.map((idx) => (
+    <div>
+      <div className="space-y-3 border-b border-line px-4 pb-3 pt-4">
+        <div className="flex gap-2 overflow-x-auto pb-1 text-xs">
+          {marketQuotes.map((idx) => (
             <button
               key={idx.symbol}
               onClick={() => setSymbol(idx.symbol)}
-              className="flex shrink-0 items-center gap-2"
+              className={clsx(
+                "flex shrink-0 items-center gap-2 rounded-lg border px-2.5 py-1.5",
+                idx.symbol === symbol ? "border-accent/60 bg-accent/10" : "border-line bg-card hover:bg-white/5",
+              )}
             >
+              <LiveBadge quote={idx} compact />
               <span className="text-muted">{INDEX_LABELS[idx.symbol] ?? idx.symbol}</span>
               <span className="font-mono">{idx.price.toLocaleString("en-IN", { maximumFractionDigits: 2 })}</span>
-              <span className={idx.changePercent >= 0 ? "text-up" : "text-down"}>
-                {formatPercent(idx.changePercent)}
-              </span>
+              <span className={idx.changePercent >= 0 ? "text-up" : "text-down"}>{formatPercent(idx.changePercent)}</span>
             </button>
           ))}
         </div>
-      </div>
-
-      <header className="sticky top-0 z-20 flex flex-wrap items-center gap-3 border-b border-line bg-[#07090d]/90 px-4 py-3 backdrop-blur">
-        <div>
-          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-accent">Apex Desk</p>
-          <p className="text-xs text-muted">Market analysis terminal</p>
-        </div>
+        <div className="flex flex-wrap items-center gap-2">
         <form onSubmit={onSearch} className="relative min-w-[240px] flex-1">
           <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-muted" />
           <input
@@ -295,9 +306,9 @@ export function Dashboard({ initialSymbol }: { initialSymbol: string }) {
         </form>
         <button
           onClick={() => setAlertOpen(true)}
-          className="inline-flex items-center gap-2 rounded-xl border border-line bg-card px-3 py-2 text-sm"
+          className="inline-flex items-center gap-2 rounded-xl border border-line bg-card px-3 py-2 text-sm hover:bg-white/5"
         >
-          <Bell className="h-4 w-4" />
+          <Bell className="h-4 w-4 text-warn" />
           Alerts
           {events.length > 0 && (
             <span className="rounded-full bg-down px-1.5 text-[10px] text-white">{events.length}</span>
@@ -307,21 +318,11 @@ export function Dashboard({ initialSymbol }: { initialSymbol: string }) {
           onClick={() => setReportModalOpen(true)}
           className="inline-flex items-center gap-2 rounded-xl border border-accent/40 bg-accent/10 px-3 py-2 text-sm font-medium text-accent hover:bg-accent/20 transition-colors"
         >
-          <Sparkles className="h-4 w-4" />
-          Daily AI Report (8:45 AM)
+          <Mail className="h-4 w-4" />
+          Daily AI Report
         </button>
-        <button
-          onClick={async () => {
-            await fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
-            window.location.replace("/login");
-          }}
-          title="Sign out"
-          className="inline-flex items-center gap-2 rounded-xl border border-line bg-card px-3 py-2 text-sm hover:bg-white/5"
-        >
-          <LogOut className="h-4 w-4" />
-          Logout
-        </button>
-      </header>
+        </div>
+      </div>
 
       <div className="grid gap-4 p-4 xl:grid-cols-[240px_minmax(0,1fr)_320px]">
         <aside className="panel h-fit p-3">
@@ -389,7 +390,7 @@ export function Dashboard({ initialSymbol }: { initialSymbol: string }) {
                     <div className="flex items-center gap-2">
                       <h1 className="text-2xl font-semibold">{quote.symbol}</h1>
                       <span className="chip bg-white/8 text-muted">{quote.exchange}</span>
-                      <span className="chip bg-white/8 text-muted">{quote.marketState}</span>
+                      {liveQuote ? <LiveBadge quote={liveQuote} /> : <span className="chip bg-white/8 text-muted">{quote.marketState}</span>}
                     </div>
                     <p className="text-sm text-muted">
                       {quote.name}
@@ -398,11 +399,25 @@ export function Dashboard({ initialSymbol }: { initialSymbol: string }) {
                     </p>
                   </div>
                   <div className="text-right">
-                    <p className="font-mono text-3xl font-semibold">{formatPrice(quote.price, quote.currency)}</p>
+                    <p className="font-mono text-3xl font-semibold">{formatPrice(shown.price, quote.currency)}</p>
                     <p className={clsx("flex items-center justify-end gap-1 text-sm", up ? "text-up" : "text-down")}>
                       {up ? <TrendingUp className="h-4 w-4" /> : <TrendingDown className="h-4 w-4" />}
-                      {formatPrice(quote.change, quote.currency)} ({formatPercent(quote.changePercent)})
+                      {formatPrice(shown.change, quote.currency)} ({formatPercent(shown.changePercent)})
                     </p>
+                    {liveQuote && (
+                      <p className="mt-0.5 text-[11px] text-muted">
+                        {liveQuote.source} · last trade{" "}
+                        {new Date(liveQuote.time * 1000).toLocaleString("en-IN", {
+                          timeZone: "Asia/Kolkata",
+                          day: "numeric",
+                          month: "short",
+                          hour: "2-digit",
+                          minute: "2-digit",
+                          second: "2-digit",
+                        })}{" "}
+                        IST
+                      </p>
+                    )}
                   </div>
                 </div>
                 <div className="mt-3 flex flex-wrap gap-2">
@@ -464,7 +479,7 @@ export function Dashboard({ initialSymbol }: { initialSymbol: string }) {
                     <Loader2 className="h-3 w-3 animate-spin" /> Refreshing {range}…
                   </div>
                 )}
-                <PriceChart data={data} overlay={overlay} />
+                <PriceChart data={data} overlay={overlay} live={liveQuote} />
               </section>
 
               <section className="panel p-4">

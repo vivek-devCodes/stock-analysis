@@ -24,7 +24,11 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full bg-background text-foreground">{children}</body>
+      {/* Browser extensions (e.g. Grammarly) add attributes to <body> before React hydrates.
+          This only silences attribute mismatches on <body> itself, not on anything inside it. */}
+      <body className="min-h-full bg-background text-foreground" suppressHydrationWarning>
+        {children}
+      </body>
     </html>
   );
 }

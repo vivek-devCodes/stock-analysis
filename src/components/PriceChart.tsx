@@ -11,14 +11,21 @@ import {
   LineStyle,
   createChart,
   type IChartApi,
+  type ISeriesApi,
+  type LogicalRange,
   type Time,
   type UTCTimestamp,
 } from "lightweight-charts";
-import type { AnalyzeResponse } from "@/lib/types";
+import type { AnalyzeResponse, LiveQuote } from "@/lib/types";
+
+const INTERVAL_SECONDS: Record<string, number> = { "5m": 300, "15m": 900, "1h": 3600, "1d": 86400, "1wk": 604800 };
+type Bar = { time: UTCTimestamp; open: number; high: number; low: number; close: number };
 
 type Props = {
   data: AnalyzeResponse;
   overlay: "sma" | "ema" | "bb" | "forecast";
+  /** Latest live tick for this symbol; moves the last candle (or opens a new one). */
+  live?: LiveQuote | null;
 };
 
 function toTime(unix: number): UTCTimestamp {
@@ -50,11 +57,15 @@ function makeChart(el: HTMLElement, height: number, rightOffset = 8) {
   });
 }
 
-export function PriceChart({ data, overlay }: Props) {
+export function PriceChart({ data, overlay, live }: Props) {
   const priceRef = useRef<HTMLDivElement>(null);
   const rsiRef = useRef<HTMLDivElement>(null);
   const macdRef = useRef<HTMLDivElement>(null);
   const charts = useRef<IChartApi[]>([]);
+  const candleSeries = useRef<ISeriesApi<"Candlestick"> | null>(null);
+  const lastBar = useRef<Bar | null>(null);
+  // Remember the zoom per symbol+range so background refreshes don't reset it.
+  const view = useRef<{ key: string; range: LogicalRange | null } | null>(null);
 
   useEffect(() => {
     if (!priceRef.current || !rsiRef.current || !macdRef.current) return;
@@ -74,15 +85,16 @@ export function PriceChart({ data, overlay }: Props) {
       wickUpColor: "#3dd68c",
       wickDownColor: "#ff5c7a",
     });
-    candles.setData(
-      data.candles.map((c) => ({
-        time: toTime(c.time),
-        open: c.open,
-        high: c.high,
-        low: c.low,
-        close: c.close,
-      })),
-    );
+    const bars: Bar[] = data.candles.map((c) => ({
+      time: toTime(c.time),
+      open: c.open,
+      high: c.high,
+      low: c.low,
+      close: c.close,
+    }));
+    candles.setData(bars);
+    candleSeries.current = candles;
+    lastBar.current = bars.at(-1) ?? null;
 
     const volume = priceChart.addSeries(HistogramSeries, {
       priceFormat: { type: "volume" },
@@ -207,7 +219,12 @@ export function PriceChart({ data, overlay }: Props) {
     sync(rsiChart, [priceChart, macdChart]);
     sync(macdChart, [priceChart, rsiChart]);
 
-    priceChart.timeScale().fitContent();
+    const viewKey = `${data.quote.symbol}|${data.range}`;
+    if (view.current?.key === viewKey && view.current.range) {
+      priceChart.timeScale().setVisibleLogicalRange(view.current.range);
+    } else {
+      priceChart.timeScale().fitContent();
+    }
 
     const resize = () => {
       charts.current.forEach((chart, i) => {
@@ -220,11 +237,30 @@ export function PriceChart({ data, overlay }: Props) {
     observer.observe(priceRef.current);
 
     return () => {
+      view.current = { key: viewKey, range: priceChart.timeScale().getVisibleLogicalRange() };
+      candleSeries.current = null;
       observer.disconnect();
       charts.current.forEach((c) => c.remove());
       charts.current = [];
     };
   }, [data, overlay]);
+
+  // Live tick → update the forming candle, or start the next one when its interval has passed.
+  useEffect(() => {
+    const series = candleSeries.current;
+    const last = lastBar.current;
+    const step = INTERVAL_SECONDS[data.interval];
+    if (!live || !series || !last || !step || live.symbol !== data.quote.symbol || live.time < last.time) return;
+    let bar: Bar;
+    if (live.time < last.time + step) {
+      bar = { ...last, high: Math.max(last.high, live.price), low: Math.min(last.low, live.price), close: live.price };
+    } else {
+      const time = (last.time + step * Math.floor((live.time - last.time) / step)) as UTCTimestamp;
+      bar = { time, open: live.price, high: live.price, low: live.price, close: live.price };
+    }
+    series.update(bar);
+    lastBar.current = bar;
+  }, [live, data.interval, data.quote.symbol]);
 
   return (
     <div className="space-y-2">

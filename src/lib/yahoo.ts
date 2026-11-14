@@ -1,4 +1,4 @@
-import type { Candle, NewsItem, Quote, SearchResult } from "./types";
+import type { Candle, LiveQuote, NewsItem, Quote, SearchResult } from "./types";
 
 const YAHOO_CHART = [
   "https://query1.finance.yahoo.com/v8/finance/chart",
@@ -34,6 +34,72 @@ async function fetchJson(urls: string[]): Promise<unknown> {
     }
   }
   throw lastError ?? new Error("All Yahoo Finance endpoints failed");
+}
+
+/* ------------------------------------------------------------------ */
+/*  Session: Yahoo's quote and quoteSummary endpoints need a cookie +  */
+/*  "crumb" pair. Without it they answer 401 "Invalid Crumb".          */
+/* ------------------------------------------------------------------ */
+
+type YahooSession = { cookie: string; crumb: string };
+const SESSION_TTL_MS = 30 * 60 * 1000;
+let sessionPromise: Promise<YahooSession> | null = null;
+let sessionCreatedAt = 0;
+
+async function createSession(): Promise<YahooSession> {
+  const res = await fetch("https://fc.yahoo.com/", { headers: HEADERS, redirect: "manual", cache: "no-store" });
+  const cookie = res.headers
+    .getSetCookie()
+    .map((c) => c.split(";")[0])
+    .join("; ");
+  if (!cookie) throw new Error("Yahoo did not return a session cookie");
+  const crumbRes = await fetch("https://query2.finance.yahoo.com/v1/test/getcrumb", {
+    headers: { ...HEADERS, Accept: "text/plain", Cookie: cookie },
+    cache: "no-store",
+  });
+  const crumb = (await crumbRes.text()).trim();
+  if (!crumbRes.ok || !crumb || crumb.length > 40 || crumb.includes("<")) {
+    throw new Error(`Yahoo crumb unavailable (HTTP ${crumbRes.status})`);
+  }
+  return { cookie, crumb };
+}
+
+function getSession(force = false): Promise<YahooSession> {
+  if (!sessionPromise || force || Date.now() - sessionCreatedAt > SESSION_TTL_MS) {
+    sessionCreatedAt = Date.now();
+    sessionPromise = createSession().catch((error) => {
+      sessionPromise = null;
+      throw error;
+    });
+  }
+  return sessionPromise;
+}
+
+/** GET a crumb-protected Yahoo endpoint; refreshes the session once if the crumb is rejected. */
+async function fetchJsonWithCrumb(buildUrls: (crumb: string) => string[]): Promise<unknown> {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const session = await getSession(attempt > 0);
+    let unauthorized = false;
+    let lastError: Error | null = null;
+    for (const url of buildUrls(encodeURIComponent(session.crumb))) {
+      try {
+        const res = await fetch(url, { headers: { ...HEADERS, Cookie: session.cookie }, cache: "no-store" });
+        if (res.status === 401 || res.status === 403) {
+          unauthorized = true;
+          continue;
+        }
+        if (!res.ok) {
+          lastError = new Error(`HTTP ${res.status} for ${url.split("?")[0]}`);
+          continue;
+        }
+        return await res.json();
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+      }
+    }
+    if (!unauthorized) throw lastError ?? new Error("Yahoo request failed");
+  }
+  throw new Error("Yahoo rejected the session crumb");
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -176,8 +242,8 @@ export async function enrichQuote(quote: Quote): Promise<Quote> {
   try {
     const encoded = encodeURIComponent(quote.symbol);
     const modules = "summaryDetail,defaultKeyStatistics,financialData,assetProfile,price";
-    const data = (await fetchJson(
-      YAHOO_QUOTE.map((base) => `${base}/${encoded}?modules=${modules}`),
+    const data = (await fetchJsonWithCrumb((crumb) =>
+      YAHOO_QUOTE.map((base) => `${base}/${encoded}?modules=${modules}&crumb=${crumb}`),
     )) as { quoteSummary?: { result?: Array<Record<string, unknown>> } };
 
     const result = data.quoteSummary?.result?.[0];
@@ -247,7 +313,7 @@ const NEGATIVE = [
   "slump",
 ];
 
-function scoreHeadline(title: string) {
+export function scoreHeadline(title: string) {
   const text = title.toLowerCase();
   let score = 0;
   for (const word of POSITIVE) if (text.includes(word)) score += 1;
@@ -308,3 +374,55 @@ export async function fetchIndexQuotes(symbols: string[]) {
     }> => item.status === "fulfilled")
     .map((item) => item.value);
 }
+
+/* ------------------------------------------------------------------ */
+/*  Batch live quotes (one request for many symbols)                   */
+/* ------------------------------------------------------------------ */
+
+const YAHOO_BATCH_QUOTE = [
+  "https://query2.finance.yahoo.com/v7/finance/quote",
+  "https://query1.finance.yahoo.com/v7/finance/quote",
+];
+
+export async function fetchQuotesBatch(symbols: string[]): Promise<LiveQuote[]> {
+  if (!symbols.length) return [];
+  const list = symbols.map(encodeURIComponent).join(",");
+  const data = (await fetchJsonWithCrumb((crumb) =>
+    YAHOO_BATCH_QUOTE.map((base) => `${base}?symbols=${list}&crumb=${crumb}`),
+  )) as { quoteResponse?: { result?: Array<Record<string, unknown>> } };
+
+  return (data.quoteResponse?.result ?? []).flatMap((q) => {
+    const price = raw(q.regularMarketPrice);
+    if (price == null) return [];
+    const delay = raw(q.exchangeDataDelayedBy) ?? 0;
+    return [
+      {
+        symbol: str(q.symbol),
+        name: str(q.shortName || q.longName || q.symbol),
+        price,
+        change: raw(q.regularMarketChange) ?? 0,
+        changePercent: raw(q.regularMarketChangePercent) ?? 0,
+        previousClose: raw(q.regularMarketPreviousClose),
+        open: raw(q.regularMarketOpen),
+        dayHigh: raw(q.regularMarketDayHigh),
+        dayLow: raw(q.regularMarketDayLow),
+        volume: raw(q.regularMarketVolume),
+        time: raw(q.regularMarketTime) ?? Math.floor(Date.now() / 1000),
+        marketState: str(q.marketState, "REGULAR"),
+        delayMinutes: delay,
+        source: delay > 0 ? `Yahoo (${delay}-min delayed)` : "Yahoo (live)",
+      },
+    ];
+  });
+}
+
+/** Raw quoteSummary modules for the fundamentals screener. */
+export async function fetchQuoteSummary(symbol: string, modules: string): Promise<Record<string, unknown> | null> {
+  const encoded = encodeURIComponent(symbol);
+  const data = (await fetchJsonWithCrumb((crumb) =>
+    YAHOO_QUOTE.map((base) => `${base}/${encoded}?modules=${modules}&crumb=${crumb}`),
+  )) as { quoteSummary?: { result?: Array<Record<string, unknown>> } };
+  return data.quoteSummary?.result?.[0] ?? null;
+}
+
+export { raw as yahooRaw, asRecord as yahooRecord };
