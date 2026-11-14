@@ -1,10 +1,13 @@
 import { NextRequest } from "next/server";
+import { requireRole } from "@/lib/auth/guard";
 import { buildInsight, newsSentiment } from "@/lib/analysis";
 import { buildForecast } from "@/lib/forecast";
 import { computeIndicators } from "@/lib/indicators";
 import { enrichQuote, fetchChart, fetchNews, RANGE_INTERVAL } from "@/lib/yahoo";
 
 export async function GET(request: NextRequest) {
+  const auth = await requireRole(request);
+  if (auth instanceof Response) return auth;
   const symbol = request.nextUrl.searchParams.get("symbol")?.trim();
   const range = request.nextUrl.searchParams.get("range") ?? "1y";
   if (!symbol) {

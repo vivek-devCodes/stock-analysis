@@ -1,3 +1,5 @@
+import type { NextRequest } from "next/server";
+import { requireRole } from "@/lib/auth/guard";
 import { fetchIndexQuotes } from "@/lib/yahoo";
 
 const INDICES = [
@@ -10,7 +12,9 @@ const INDICES = [
   "BTC-USD",
 ];
 
-export async function GET() {
+export async function GET(request: NextRequest) {
+  const auth = await requireRole(request);
+  if (auth instanceof Response) return auth;
   try {
     const indices = await fetchIndexQuotes(INDICES);
     return Response.json({ indices, asOf: new Date().toISOString() });

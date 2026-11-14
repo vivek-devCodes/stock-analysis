@@ -1,6 +1,7 @@
 "use client";
 
-import { Bell, Loader2, Mail, Plus, Search, Sparkles, Star, Trash2, TrendingDown, TrendingUp, X } from "lucide-react";
+import { Bell, Loader2, LogOut, Mail, Plus, Search, Sparkles, Star, Trash2, TrendingDown, TrendingUp, X } from "lucide-react";
+import { WatchlistAdder } from "./WatchlistAdder";
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PriceChart } from "@/components/PriceChart";
 import { clsx, formatNumber, formatPercent, formatPrice } from "@/lib/format";
@@ -309,6 +310,17 @@ export function Dashboard({ initialSymbol }: { initialSymbol: string }) {
           <Sparkles className="h-4 w-4" />
           Daily AI Report (8:45 AM)
         </button>
+        <button
+          onClick={async () => {
+            await fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
+            window.location.replace("/login");
+          }}
+          title="Sign out"
+          className="inline-flex items-center gap-2 rounded-xl border border-line bg-card px-3 py-2 text-sm hover:bg-white/5"
+        >
+          <LogOut className="h-4 w-4" />
+          Logout
+        </button>
       </header>
 
       <div className="grid gap-4 p-4 xl:grid-cols-[240px_minmax(0,1fr)_320px]">
@@ -330,6 +342,13 @@ export function Dashboard({ initialSymbol }: { initialSymbol: string }) {
               </button>
             )}
           </div>
+          <WatchlistAdder
+            watchlist={watchlist}
+            onAdd={(sym) => {
+              if (!watchlist.includes(sym)) persistWatchlist([sym, ...watchlist]);
+              setSymbol(sym);
+            }}
+          />
           <div className="space-y-1">
             {watchlist.map((item) => (
               <button
@@ -637,6 +656,7 @@ export function Dashboard({ initialSymbol }: { initialSymbol: string }) {
 
       {reportModalOpen && (
         <DailyReportModal
+          watchlist={watchlist}
           onClose={() => setReportModalOpen(false)}
           loading={reportLoading}
           status={reportStatus}
@@ -645,7 +665,11 @@ export function Dashboard({ initialSymbol }: { initialSymbol: string }) {
             setReportLoading(true);
             setReportStatus("Collecting NSE/BSE & Yahoo data, calculating indicators, running Gemini 2.5 Flash deep analysis...");
             try {
-              const res = await fetch("/api/daily-report", { method: "POST" });
+              const res = await fetch("/api/daily-report", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ watchlist }),
+              });
               const json = await res.json();
               if (json.success) {
                 setReportStatus("✅ Report generated and email dispatched to configured recipients successfully!");
@@ -774,6 +798,7 @@ function AlertModal({
 }
 
 function DailyReportModal({
+  watchlist,
   onClose,
   loading,
   status,
@@ -781,6 +806,7 @@ function DailyReportModal({
   onTrigger,
   onTestEmail,
 }: {
+  watchlist: string[];
   onClose: () => void;
   loading: boolean;
   status: string | null;
@@ -836,6 +862,18 @@ function DailyReportModal({
                 <li>• <strong>Setup:</strong> Set <code className="text-warn">GEMINI_API_KEY</code> &amp; <code className="text-warn">SMTP_PASS</code> in <code className="text-muted">.env</code></li>
               </ul>
             </div>
+          </div>
+
+          <div className="rounded-xl border border-line bg-card p-3 text-xs">
+            <p className="font-semibold uppercase text-muted">⭐ Your watchlist in the email</p>
+            <p className="mt-1 text-foreground/80">
+              &quot;Run &amp; Send Report Now&quot; includes your {watchlist.length} watchlist stocks. The scheduled
+              8:45 AM email can&apos;t read this browser&apos;s storage, so paste this into the{" "}
+              <code className="text-warn">WATCHLIST_SYMBOLS</code> environment variable on Vercel:
+            </p>
+            <code className="mt-2 block select-all break-all rounded-lg bg-[#0a0f16] p-2 text-accent">
+              {watchlist.join(",")}
+            </code>
           </div>
 
           {status && (

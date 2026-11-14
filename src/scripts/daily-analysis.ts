@@ -18,7 +18,8 @@ import { buildInsight, newsSentiment } from "../lib/analysis";
 import { runLLMAnalysis, type StockAnalysisContext, type MarketContext } from "../lib/llm-analyzer";
 import { sendDailyReport, testEmailConnection } from "../lib/email-service";
 import { getAllStocks, SECTORS } from "../lib/stock-universe";
-import type { DailyReport } from "../lib/email-template";
+import type { DailyReport, WatchlistEntry } from "../lib/email-template";
+import { parseSymbolList, sanitizeSymbols } from "../lib/symbols";
 
 /* ------------------------------------------------------------------ */
 /*  Configuration                                                      */
@@ -148,9 +149,56 @@ function selectStocksForAnalysis(): string[] {
 /*  Main pipeline                                                      */
 /* ------------------------------------------------------------------ */
 
-export async function runDailyAnalysis(): Promise<DailyReport> {
+function toWatchlistEntry(a: StockAnalysisContext): WatchlistEntry {
+  const below = a.insight.support.filter((s) => s < a.quote.price);
+  const above = a.insight.resistance.filter((r) => r > a.quote.price);
+  return {
+    symbol: a.symbol,
+    name: a.quote.name,
+    currency: a.quote.currency,
+    price: a.quote.price,
+    changePercent: a.quote.changePercent,
+    recommendation: (["BUY", "SELL", "HOLD"] as const).find((r) => r === a.insight.recommendation) ?? "HOLD",
+    score: a.insight.score,
+    confidence: a.insight.confidence,
+    rsi: a.indicators.rsi,
+    forecastChangePercent: a.forecast.expectedChangePercent,
+    forecastPrice: a.forecast.expectedPrice,
+    support: below.length ? Math.max(...below) : null,
+    resistance: above.length ? Math.min(...above) : null,
+    signals: a.insight.working,
+    risks: [...a.insight.notWorking, ...a.insight.risks],
+    news: a.news.slice(0, 3).map((n) => ({ title: n.title, link: n.link, publisher: n.publisher, sentiment: n.sentiment })),
+  };
+}
+
+async function analyzeWatchlist(symbols: string[]): Promise<WatchlistEntry[]> {
+  const entries: WatchlistEntry[] = [];
+  for (let i = 0; i < symbols.length; i += BATCH_SIZE) {
+    const batch = symbols.slice(i, i + BATCH_SIZE);
+    const results = await Promise.all(batch.map(analyzeStock));
+    for (const r of results) if (r) entries.push(toWatchlistEntry(r));
+    if (i + BATCH_SIZE < symbols.length) await sleep(BATCH_DELAY_MS);
+  }
+  return entries;
+}
+
+export type DailyRunOptions = {
+  /** Symbols from the user's watchlist; analysed and shown in their own email section. */
+  watchlist?: string[];
+};
+
+export async function runDailyAnalysis(options: DailyRunOptions = {}): Promise<DailyReport> {
   const startTime = Date.now();
   log("🚀 Starting daily stock analysis pipeline...");
+
+  const watchlistSymbols = sanitizeSymbols(options.watchlist ?? parseSymbolList(process.env.WATCHLIST_SYMBOLS));
+  let watchlist: WatchlistEntry[] = [];
+  if (watchlistSymbols.length) {
+    log(`⭐ Analyzing watchlist: ${watchlistSymbols.join(", ")}`);
+    watchlist = await analyzeWatchlist(watchlistSymbols);
+    log(`✅ Watchlist: ${watchlist.length}/${watchlistSymbols.length} analyzed.`);
+  }
 
   // Step 1: Market overview
   const market = await getMarketContext();
@@ -197,6 +245,7 @@ export async function runDailyAnalysis(): Promise<DailyReport> {
 
   const report: DailyReport = {
     date,
+    watchlist,
     marketOverview: {
       nifty: market.nifty,
       sensex: market.sensex,

@@ -9,10 +9,12 @@
     "lint": "eslint",
     "daily-report": "tsx src/scripts/daily-analysis.ts",
     "daily-report:cron": "tsx src/scripts/daily-analysis.ts --cron",
-    "test-email": "tsx src/scripts/daily-analysis.ts --test-email"
+    "test-email": "tsx src/scripts/daily-analysis.ts --test-email",
+    "hash-password": "node scripts/hash-password.mjs"
   },
   "dependencies": {
     "@google/genai": "^2.30.0",
+    "jose": "^6.2.17",
     "lightweight-charts": "^5.2.1",
     "lucide-react": "^1.55.0",
     "next": "16.4.6",
