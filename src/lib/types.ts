@@ -163,3 +163,24 @@ export type AlertEvent = {
   at: string;
   severity: "info" | "warning" | "critical";
 };
+
+/** A price snapshot from the live layer (NSE when fresher, otherwise Yahoo). */
+export type LiveQuote = {
+  symbol: string;
+  name: string;
+  price: number;
+  change: number;
+  changePercent: number;
+  previousClose: number | null;
+  open: number | null;
+  dayHigh: number | null;
+  dayLow: number | null;
+  volume: number | null;
+  /** Unix seconds of the last trade/update. */
+  time: number;
+  /** REGULAR, PRE, POST, CLOSED … */
+  marketState: string;
+  delayMinutes: number;
+  /** Human-readable data source, e.g. "NSE (1-min)" or "Yahoo (15-min delayed)". */
+  source: string;
+};

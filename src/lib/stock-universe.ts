@@ -49,7 +49,7 @@ export const SECTORS: Record<SectorName, string[]> = {
     "WIPRO.NS",
     "HCLTECH.NS",
     "TECHM.NS",
-    "LTIM.NS",
+    "LTM.NS", // LTIMindtree, renamed LTM
     "PERSISTENT.NS",
     "COFORGE.NS",
   ],
@@ -63,7 +63,9 @@ export const SECTORS: Record<SectorName, string[]> = {
   ],
   Auto: [
     "MARUTI.NS",
-    "TATAMOTORS.NS",
+    "TMPV.NS", // Tata Motors Passenger Vehicles (demerged)
+
+    "TMCV.NS", // Tata Motors commercial vehicles
     "M&M.NS",
     "BAJAJ-AUTO.NS",
     "HEROMOTOCO.NS",
@@ -149,7 +151,7 @@ export const NIFTY_50: string[] = [
   "JSWSTEEL.NS",
   "KOTAKBANK.NS",
   "LT.NS",
-  "LTIM.NS",
+  "LTM.NS", // LTIMindtree, renamed LTM
   "M&M.NS",
   "MARUTI.NS",
   "NESTLEIND.NS",
@@ -161,7 +163,9 @@ export const NIFTY_50: string[] = [
   "SBIN.NS",
   "SUNPHARMA.NS",
   "TATACONSUM.NS",
-  "TATAMOTORS.NS",
+  "TMPV.NS", // Tata Motors Passenger Vehicles (demerged)
+
+  "TMCV.NS", // Tata Motors commercial vehicles
   "TATASTEEL.NS",
   "TCS.NS",
   "TECHM.NS",

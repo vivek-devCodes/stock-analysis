@@ -1,6 +1,6 @@
 "use client";
 
-import { Loader2, Lock, User } from "lucide-react";
+import { Activity, Loader2, LogIn, Lock, ShieldCheck, User } from "lucide-react";
 import { FormEvent, useState } from "react";
 
 function safeNext(): string {
@@ -39,10 +39,20 @@ export default function LoginPage() {
   return (
     <main className="flex min-h-screen items-center justify-center p-4">
       <form onSubmit={onSubmit} className="panel w-full max-w-sm space-y-4 p-6">
+        <div className="flex items-center gap-3">
+          <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-accent/15 text-accent">
+            <Activity className="h-6 w-6" />
+          </span>
+          <div>
+            <p className="text-sm font-semibold">Apex Desk</p>
+            <p className="text-[11px] text-muted">Stock Analysis CRM</p>
+          </div>
+        </div>
         <div>
-          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-accent">Apex Desk</p>
-          <h1 className="mt-1 text-lg font-semibold">Sign in</h1>
-          <p className="text-xs text-muted">Admin access only.</p>
+          <h1 className="text-lg font-semibold">Sign in</h1>
+          <p className="flex items-center gap-1 text-xs text-muted">
+            <ShieldCheck className="h-3.5 w-3.5 text-up" /> Admin access only.
+          </p>
         </div>
 
         <label className="block space-y-1 text-xs text-muted">
@@ -82,7 +92,7 @@ export default function LoginPage() {
           disabled={loading}
           className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-accent px-4 py-2.5 text-sm font-semibold text-white hover:bg-accent/90 disabled:opacity-50"
         >
-          {loading && <Loader2 className="h-4 w-4 animate-spin" />}
+          {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <LogIn className="h-4 w-4" />}
           Sign in
         </button>
       </form>

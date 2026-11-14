@@ -160,7 +160,7 @@ function toWatchlistEntry(a: StockAnalysisContext): WatchlistEntry {
     changePercent: a.quote.changePercent,
     recommendation: (["BUY", "SELL", "HOLD"] as const).find((r) => r === a.insight.recommendation) ?? "HOLD",
     score: a.insight.score,
-    confidence: a.insight.confidence,
+    confidence: Math.round(a.insight.confidence * 100), // insight.confidence is 0–1
     rsi: a.indicators.rsi,
     forecastChangePercent: a.forecast.expectedChangePercent,
     forecastPrice: a.forecast.expectedPrice,
