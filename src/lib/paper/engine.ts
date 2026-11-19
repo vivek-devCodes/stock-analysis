@@ -54,7 +54,9 @@ function toTrade(r: AnalysisReport, trigger: "auto" | "manual", day: string): { 
       tradeDay: day,
       symbol: r.instrument.symbol,
       name: r.instrument.name,
-      openedAt: new Date().toISOString(),
+      // Stamp the trade at the quote's own time (Yahoo can lag ~15 min), so settlement replays every
+      // candle after the price we actually entered at — otherwise an early stop-out could be missed.
+      openedAt: r.price.timestamp ?? new Date().toISOString(),
       trigger,
       kind,
       side,
