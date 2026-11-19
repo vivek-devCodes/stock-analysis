@@ -8,6 +8,15 @@ import { crossSignals, type ChartSignal } from "@/lib/chart-studies";
 import { enrichQuote, fetchChart, fetchNews, RANGE_INTERVAL, WARMUP_RANGE } from "@/lib/yahoo";
 import type { Candle } from "@/lib/types";
 
+const MIN_CANDLES = 15;
+
+/** The same company's ticker on the other Indian exchange (.NS <-> .BO), or null for other symbols. */
+function otherListing(symbol: string): string | null {
+  const m = /^(.+)\.(NS|BO)$/i.exec(symbol);
+  if (!m) return null;
+  return `${m[1]}.${m[2].toUpperCase() === "NS" ? "BO" : "NS"}`;
+}
+
 const istDay = (t: number) => Math.floor((t + 19800) / 86400);
 
 /** Swing-engine and golden/death-cross signals from daily candles, from the start of the visible range. */
@@ -36,7 +45,7 @@ function snapToChart(signals: ChartSignal[], candles: Candle[], interval: string
 export async function GET(request: NextRequest) {
   const auth = await requireRole(request);
   if (auth instanceof Response) return auth;
-  const symbol = request.nextUrl.searchParams.get("symbol")?.trim();
+  let symbol = request.nextUrl.searchParams.get("symbol")?.trim();
   const range = request.nextUrl.searchParams.get("range") ?? "1y";
   if (!symbol) {
     return Response.json({ error: "symbol is required" }, { status: 400 });
@@ -46,9 +55,30 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const { quote: rawQuote, candles, interval } = await fetchChart(symbol, range);
-    if (candles.length < 15) {
-      return Response.json({ error: "Not enough market history for this symbol." }, { status: 422 });
+    let notice: string | undefined;
+    // A stock that just moved exchange (e.g. BSE SME -> NSE main board) has only a few sessions under
+    // its new ticker. Its history lives under the other Indian listing, so use that one instead.
+    const alt = otherListing(symbol);
+    let chart = await fetchChart(symbol, range).catch((e) => {
+      if (!alt) throw e;
+      return null;
+    });
+    const have = chart?.candles.length ?? 0;
+    if (alt && have < MIN_CANDLES) {
+      const other = await fetchChart(alt, range).catch(() => null);
+      if (other && other.candles.length > have) {
+        notice = `${symbol} has only ${have} session${have === 1 ? "" : "s"} of history on Yahoo (likely a recent listing or exchange move), so this shows the ${alt.endsWith(".BO") ? "BSE" : "NSE"} listing ${alt} instead.`;
+        chart = other;
+        symbol = alt;
+      }
+    }
+    if (!chart) throw new Error(`No market data for ${symbol}`);
+    const { quote: rawQuote, candles, interval } = chart;
+    if (candles.length < MIN_CANDLES) {
+      return Response.json(
+        { error: `Not enough market history for ${symbol}: Yahoo has ${candles.length} session${candles.length === 1 ? "" : "s"}, and the analyzer needs at least ${MIN_CANDLES}` },
+        { status: 422 },
+      );
     }
     const [quote, news] = await Promise.all([enrichQuote(rawQuote), fetchNews(symbol, rawQuote.name)]);
     const indicators = computeIndicators(candles);
@@ -82,6 +112,7 @@ export async function GET(request: NextRequest) {
       newsSentiment: newsSentiment(news),
       dailySignals,
       studyCandles,
+      notice,
       provider: "Yahoo Finance (NSE/BSE via .NS/.BO suffixes; global equities and indices)",
     });
   } catch (error) {
