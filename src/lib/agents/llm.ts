@@ -2,13 +2,13 @@ import "server-only";
 import { ChatGoogleGenerativeAI } from "@langchain/google-genai";
 import { z } from "zod";
 import type { AnalysisReport, Validation } from "./types";
+import { geminiModels, shouldTryNextModel } from "@/lib/gemini-models";
 
 /**
  * Gemini is used for two things only: writing the narrative and acting as a sceptical second
  * reviewer. It never computes numbers or probabilities, and it can only DOWNGRADE a verdict.
  */
 
-const MODEL = "gemini-2.5-flash";
 const TIMEOUT_MS = 25_000;
 
 const ReviewSchema = z.object({
@@ -55,20 +55,25 @@ function brief(r: AnalysisReport) {
 
 export async function llmReview(report: AnalysisReport): Promise<LlmReview | null> {
   if (!llmAvailable()) return null;
-  const model = new ChatGoogleGenerativeAI({ model: MODEL, apiKey: process.env.GEMINI_API_KEY, temperature: 0.2, maxRetries: 1 });
-  const structured = model.withStructuredOutput(ReviewSchema, { name: "trade_review" });
-  try {
-    return await structured.invoke(
-      [
-        ["system", SYSTEM],
-        ["human", `Review this analysis and write the research note.\n\n${JSON.stringify(brief(report))}`],
-      ],
-      { signal: AbortSignal.timeout(TIMEOUT_MS) },
-    );
-  } catch (error) {
-    console.error("[agent] Gemini review failed:", error instanceof Error ? error.message : error);
-    return null;
+  let lastError: unknown;
+  for (const name of geminiModels()) {
+    const model = new ChatGoogleGenerativeAI({ model: name, apiKey: process.env.GEMINI_API_KEY, temperature: 0.2, maxRetries: 1 });
+    const structured = model.withStructuredOutput(ReviewSchema, { name: "trade_review" });
+    try {
+      return await structured.invoke(
+        [
+          ["system", SYSTEM],
+          ["human", `Review this analysis and write the research note.\n\n${JSON.stringify(brief(report))}`],
+        ],
+        { signal: AbortSignal.timeout(TIMEOUT_MS) },
+      );
+    } catch (error) {
+      lastError = error;
+      if (!shouldTryNextModel(error)) break;
+    }
   }
+  console.error("[agent] Gemini review failed:", lastError instanceof Error ? lastError.message : lastError);
+  return null;
 }
 
 /** One step down; never up. */

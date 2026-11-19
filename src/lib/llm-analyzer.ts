@@ -1,18 +1,33 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import type { Candle, Indicators, Quote, NewsItem } from "./types";
 import type { DailyReport, StockPick, SectorAnalysis } from "./email-template";
+import { geminiModels, shouldTryNextModel } from "./gemini-models";
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY ?? "" });
 
-const MODEL = "gemini-2.5-flash";
-
 const KEY_HELP = "Create a free key at https://aistudio.google.com/apikey, set it as GEMINI_API_KEY in .env.local (and in Vercel), then restart the server";
 
-/** Run a Gemini call, failing early with a clear message when the key is missing and translating Google's errors. */
-async function gemini<T>(call: () => Promise<T>): Promise<T> {
+/**
+ * Run a Gemini call: fail early with a clear message when the key is missing, try each model in
+ * geminiModels() until one is available, and translate Google's errors into plain messages.
+ */
+async function gemini<T>(call: (model: string) => Promise<T>): Promise<T> {
   if (!process.env.GEMINI_API_KEY?.trim()) throw new Error(`GEMINI_API_KEY is not set. ${KEY_HELP}.`);
+  const models = geminiModels();
   try {
-    return await call();
+    let lastError: unknown;
+    for (const model of models) {
+      try {
+        const out = await call(model);
+        console.log(`[LLM] Answered by ${model}`);
+        return out;
+      } catch (error) {
+        lastError = error;
+        if (!shouldTryNextModel(error)) throw error;
+        console.warn(`[LLM] ${model} unavailable, trying the next model`);
+      }
+    }
+    throw lastError;
   } catch (error) {
     const raw = error instanceof Error ? error.message : String(error);
     if (/PERMISSION_DENIED|API_KEY_INVALID|API key not valid|"code":\s*40[13]\b/i.test(raw)) {
@@ -22,7 +37,10 @@ async function gemini<T>(call: () => Promise<T>): Promise<T> {
       throw new Error("Gemini free-tier quota is used up for now. Wait a minute (or until tomorrow for the daily limit) and try again.");
     }
     if (/UNAVAILABLE|"code":\s*503\b|overloaded/i.test(raw)) {
-      throw new Error("Gemini is overloaded right now. Try again in a few minutes.");
+      throw new Error(`Every Gemini model tried (${models.join(", ")}) is overloaded right now. Try again in a few minutes.`);
+    }
+    if (/NOT_FOUND|no longer available|"code":\s*404\b/i.test(raw)) {
+      throw new Error(`None of the Gemini models tried (${models.join(", ")}) is available to this key. Set GEMINI_MODEL in .env.local to a model listed at https://ai.google.dev/gemini-api/docs/models and restart.`);
     }
     throw error;
   }
@@ -296,11 +314,11 @@ export async function runLLMAnalysis(
 }> {
   const prompt = buildAnalysisPrompt(stocks, market);
 
-  console.log(`[LLM] Sending analysis request to ${MODEL} with ${stocks.length} stocks...`);
+  console.log(`[LLM] Sending analysis request (models: ${geminiModels().join(", ")}) with ${stocks.length} stocks...`);
   const startTime = Date.now();
 
-  const response = await gemini(() => ai.models.generateContent({
-    model: MODEL,
+  const response = await gemini((model) => ai.models.generateContent({
+    model,
     contents: prompt,
     config: {
       responseMimeType: "application/json",
@@ -385,8 +403,8 @@ Provide:
 5. Risk factors
 6. 1-week and 1-month outlook`;
 
-  const response = await gemini(() => ai.models.generateContent({
-    model: MODEL,
+  const response = await gemini((model) => ai.models.generateContent({
+    model,
     contents: prompt,
     config: { temperature: 0.3, maxOutputTokens: 2048 },
   }));

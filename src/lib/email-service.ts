@@ -137,15 +137,31 @@ function buildPlainText(report: DailyReport): string {
 /*  Test email connectivity                                            */
 /* ------------------------------------------------------------------ */
 
-export async function testEmailConnection(): Promise<boolean> {
+/** Turn nodemailer/Gmail errors into a message that says what to fix. */
+export function explainSmtpError(error: unknown): string {
+  const e = error as { code?: string; responseCode?: number; message?: string };
+  const msg = e?.message ?? String(error);
+  if (/credentials missing/i.test(msg)) return msg.split(String.fromCharCode(10))[0];
+  if (e?.code === "EAUTH" || e?.responseCode === 535 || e?.responseCode === 534) {
+    return "Gmail rejected the login. SMTP_PASS must be a 16-character Google App Password (Google Account > Security > 2-Step Verification > App passwords), not your normal Gmail password, and SMTP_USER must be the full Gmail address it was created for.";
+  }
+  if (e?.code === "ETIMEDOUT" || e?.code === "ECONNECTION" || e?.code === "ESOCKET" || e?.code === "ECONNREFUSED") {
+    return `Could not reach the mail server (${e.code}). Check SMTP_HOST (smtp.gmail.com) and SMTP_PORT (587), and that your network allows outgoing SMTP.`;
+  }
+  if (e?.code === "EDNS" || e?.code === "ENOTFOUND") return "SMTP_HOST could not be found. For Gmail use smtp.gmail.com.";
+  return msg;
+}
+
+export async function testEmailConnection(): Promise<{ ok: boolean; error?: string; warning?: string }> {
   try {
     const transporter = createTransporter();
     await transporter.verify();
     console.log("[Email] SMTP connection verified successfully.");
-    return true;
+    const hasRecipients = (process.env.REPORT_RECIPIENTS ?? "").split(",").some((v) => v.trim());
+    return { ok: true, warning: hasRecipients ? undefined : "Login works, but REPORT_RECIPIENTS is empty, so reports have nowhere to go." };
   } catch (error) {
     console.error("[Email] SMTP verification failed:", error instanceof Error ? error.message : error);
-    return false;
+    return { ok: false, error: explainSmtpError(error) };
   }
 }
 
