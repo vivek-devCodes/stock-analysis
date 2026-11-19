@@ -78,7 +78,7 @@ export function PriceChart({ data, studies, signals, live }: Props) {
     charts.current.forEach((c) => c.remove());
     charts.current = [];
 
-    const priceChart = makeChart(priceRef.current, 420, 18);
+    const priceChart = makeChart(priceRef.current, 540, 18);
     const rsiChart = makeChart(rsiRef.current, 110);
     const macdChart = makeChart(macdRef.current, 110);
     charts.current = [priceChart, rsiChart, macdChart];
