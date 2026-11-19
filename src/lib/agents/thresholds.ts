@@ -88,6 +88,37 @@ export const THRESHOLDS = {
     analysed: 6, // stocks that get the full multi-agent analysis each night
     maxChasePct: 0.5, // skip at the open if price already covered ≥ 50% of the way to target
     expireDays: 4, // a plan not executed within 4 calendar days is expired
+    orbMinutes: 15, // opening range = the first 15 minutes (09:15–09:30)
+    orbDeadline: 11 * 60, // planned trades that have not broken out of the range by 11:00 IST are dropped
+  },
+  guard: {
+    // Portfolio risk rules applied before every new paper entry (src/lib/paper/risk.ts).
+    dailyLossPct: 2, // stop opening trades for the day once closed losses reach 2% of capital
+    maxOpen: 5, // at most 5 open intraday positions
+    maxPerSector: 2, // at most 2 positions in one sector
+    maxPositionPct: 25, // one position never uses more than 25% of capital
+    atrCapPct: 3, // a stock moving more than 3% a day (ATR) gets proportionally fewer shares
+    drawdownPausePct: 8, // pause new recommended trades after an 8% drawdown (shadow trades continue)
+    breakEvenR: 1, // move the stop to entry once the trade is 1 × risk in profit
+  },
+  regime: {
+    // Market regime from India VIX and the NIFTY 50 trend (src/lib/paper/regime.ts).
+    vixCaution: 18, // VIX ≥ 18: half size, at most 3 new trades
+    vixSkip: 25, // VIX ≥ 25: no new recommended trades
+    vixJumpPct: 10, // VIX up ≥ 10% in a session: treat as caution
+    trendDays: 20, // NIFTY vs its 20-day average decides the trend
+    chopBandPct: 0.75, // NIFTY within ±0.75% of its 20-day average = no trend (choppy)
+  },
+  learn: {
+    // Scorecard and adaptive weights (src/lib/learn/).
+    minSignalObs: 100, // a signal needs 100 scored observations before it is judged
+    muteBelow: 0.5, // hit rate below 50% (no better than a coin flip) → the signal is muted in ranking
+    minAgentCalls: 30, // an agent needs 30 directional calls on closed trades before its weight adapts
+    minTradesToAdapt: 60, // and the horizon needs 60 closed paper trades overall
+    weightFloor: 0.5, // adaptive weight stays between 0.5× and 1.5× the research weight
+    weightCeil: 1.5,
+    liquidCr: 10, // signals are scored on stocks trading ≥ ₹10 crore a day
+    baselinePicks: 5, // baselines: 5 stocks each
   },
 } as const;
 
@@ -130,6 +161,24 @@ export function describeRules(): Array<{ group: string; rules: string[] }> {
         `Futures build-up from the F&O bhavcopy: price × OI change. PCR ≥ ${t.exchange.pcrBullish} supportive, ≤ ${t.exchange.pcrBearish} pressure; within ${t.exchange.oiLevelPct}% of the biggest call/put OI strike = at the options wall.`,
         `Market: advances ÷ declines ≥ ${t.exchange.breadthStrong} broad rally, ≤ ${t.exchange.breadthWeak} broad sell-off; FII index futures ≥ ${t.exchange.fiiLongBullish * 100}% long bullish, ≤ ${t.exchange.fiiLongBearish * 100}% bearish.`,
         "All exchange data is end of day (the previous session's official files); live prices come from NSE's live server.",
+      ],
+    },
+    {
+      group: "Paper trading: regime, risk rules and entries",
+      rules: [
+        `Regime: India VIX ≥ ${t.regime.vixSkip} → no new recommended trades; VIX ≥ ${t.regime.vixCaution} (or up ≥ ${t.regime.vixJumpPct}% in a session) or a choppy NIFTY (within ±${t.regime.chopBandPct}% of its ${t.regime.trendDays}-day average) → half size, at most 3 positions. In a clear NIFTY trend only the with-trend side is traded.`,
+        `Stop opening trades after a ${t.guard.dailyLossPct}% daily loss; at most ${t.guard.maxOpen} open positions, ${t.guard.maxPerSector} per sector, ${t.guard.maxPositionPct}% of capital per position; stocks moving more than ${t.guard.atrCapPct}% a day get proportionally fewer shares.`,
+        `Recommended trades pause after a ${t.guard.drawdownPausePct}% drawdown until resumed on the Scorecard page. Blocked trades are still paper-traded as shadow, so each rule's value is measured.`,
+        `Planned trades enter on a break of the first ${t.plan.orbMinutes} minutes' range in their direction (until ${Math.floor(t.plan.orbDeadline / 60)}:00); the stop moves to entry once a candle closes ${t.guard.breakEvenR}× risk in profit; everything is squared off at 15:15.`,
+      ],
+    },
+    {
+      group: "Learning loop (Scorecard)",
+      rules: [
+        `Every night each NSE signal is scored on liquid stocks (≥ ₹${t.learn.liquidCr} crore/day) against the next session's open → close move.`,
+        `After ${t.learn.minSignalObs} observations a signal right less than ${t.learn.muteBelow * 100}% of the time is muted in plan ranking; better ones get up to ${t.learn.weightCeil}× weight.`,
+        `After ${t.learn.minTradesToAdapt} closed paper trades, each agent with ≥ ${t.learn.minAgentCalls} calls has its score weight scaled ${t.learn.weightFloor}–${t.learn.weightCeil}× by its hit rate (set ADAPTIVE_WEIGHTS=off to disable).`,
+        `The agent's plan is compared daily with yesterday's top ${t.learn.baselinePicks} gainers and ${t.learn.baselinePicks} random picks from the same screen, all open → close after costs.`,
       ],
     },
     {

@@ -195,6 +195,8 @@ There are three ways to start it:
 | `SMTP_HOST`, `SMTP_PORT` | Daily report | Defaults: `smtp.gmail.com`, `587` (465 switches on TLS) |
 | `SMTP_USER`, `SMTP_PASS` | Daily report | For Gmail, use an **App Password** |
 | `REPORT_RECIPIENTS` | Daily report | Comma-separated email addresses |
+| `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | Phone alerts (optional) | Free Telegram bot: entries, exits, daily report, weekly scorecard, health alerts. See §13 |
+| `ADAPTIVE_WEIGHTS` | Learning loop (optional) | `off` keeps the research score weights and ignores learned signal multipliers |
 | `FINNHUB_API_KEY`, `NEWS_API_KEY`, `ALPHA_VANTAGE_API_KEY` | — | Listed in the template, but **no code reads them yet** |
 
 ---
@@ -299,13 +301,50 @@ results / ex-dividend dates come from Yahoo Finance.
 ### The agent's day (intraday focus)
 | When (IST, Mon–Fri) | What | Where |
 |---|---|---|
-| 09:30–15:00, every 30 min | intraday scan; paper-trade run (executes **last night's plan first**, then the live agent's calls once a day); settles open trades | GitHub Actions → `/api/cron/agent-scan`, `/api/cron/paper-trade`; Vercel cron 09:35 |
+| 09:30–15:00, every 30 min | intraday scan; paper-trade run (works through **last night's plan first** — opening-range breakout entries until 11:00 — then the live agent's calls once a day); settles open trades | GitHub Actions → `/api/cron/agent-scan`, `/api/cron/paper-trade`; Vercel cron 09:35 |
 | 15:15 | every paper trade squared off (replayed from 5-min candles) | `paper/rules.ts` |
-| 19:15 | **nightly**: daily report (emailed) → download today's NSE/BSE files → build tomorrow's plan (screen → drop restricted stocks → re-rank with exchange data → full multi-agent analysis on the best 6) | Vercel cron → `/api/cron/nightly` |
-| 21:00 | backup of the nightly job (NSE sometimes publishes the F&O file late); every step is idempotent | GitHub Actions `agent-nightly.yml` |
+| 19:15 | **nightly**: download today's NSE/BSE files → daily report (emailed) → learning (scorecard, baselines, weights) → build tomorrow's plan (screen → drop restricted stocks → re-rank with exchange data and learned signal weights → full multi-agent analysis on the best 6) → portfolio → weekly scorecard (Fri) → health check | Vercel cron → `/api/cron/nightly` |
+| 21:00 | the same steps one by one (NSE sometimes publishes the F&O file late); every step is idempotent; health alerts are only sent from this run | GitHub Actions `agent-nightly.yml` |
 
-At the open a planned trade is **skipped** if the price gapped through the stop or the target, or
-already covered ≥ 50% of the way to the target (no chasing). Plans older than 4 days expire.
+At the open each planned trade waits for the first 15 minutes' range and enters only on a break in
+its direction (a stop-entry at the range edge). It is **skipped** if the stop is touched first, the
+price gapped through the target, or the entry already covered ≥ 50% of the way to the target (no
+chasing); still waiting at 11:00 → dropped. Plans older than 4 days expire.
 The Paper Trading page shows the pending plan (with the exchange evidence behind each idea), how it
 was executed, and the daily reports ("was the agent right?").
+
+---
+
+## 13. Accuracy loop: scorecard, risk rules, portfolio, alerts
+
+Code: [src/lib/learn/](src/lib/learn/), [paper/regime.ts](src/lib/paper/regime.ts), [paper/risk.ts](src/lib/paper/risk.ts), [paper/guard.ts](src/lib/paper/guard.ts), [src/lib/portfolio/](src/lib/portfolio/), [notify.ts](src/lib/notify.ts). Pages: `/scorecard`, `/portfolio`. Tests: `npm run test:learn`. Every number is in `THRESHOLDS` (`guard`, `regime`, `learn`, `plan`).
+
+### Measure (Scorecard page, nightly `learn` step)
+- **Signal scorecard** — every directional NSE signal (delivery, volume, 52-week, F&O build-up, PCR, OI walls, deals) is scored on every liquid stock (≥ ₹10 cr/day) against the **next session's open → close**. Past sessions are rebuilt from NSE's dated archive files (12 a night), so evidence exists from day one. Stored as small daily aggregates in `signal_days`.
+- **Edge, not raw hit rate** — a signal is judged by its hit rate minus what the market gave anyway (share of stocks that rose or fell). Without this a falling market makes every short signal look good.
+- **Score calibration** — closed paper trades grouped by the agent's score (< 50, 50–64, 65–74, 75+). If higher scores don't win more often, the score is flagged as miscalibrated.
+- **Baselines** — each executed plan is compared with *yesterday's top 5 gainers* and *5 random picks from the same screen*, all open → close after 0.1% costs (`baseline_days`). If the agent can't beat these, it isn't adding value yet.
+
+### Learn (bounded, reversible)
+- Signals with ≥ 100 observations and no edge are **muted** in plan ranking; ones with an edge get up to 1.5×.
+- After 60 closed paper trades, each agent with ≥ 30 calls has its score weight scaled 0.5–1.5× by its hit rate (`learned` table, used by `scoreAll`). `ADAPTIVE_WEIGHTS=off` turns both off.
+- The **self-review** (Scorecard page and weekly email) lists what to mute, what to trust, signals that work in reverse, and whether the agent beats the baselines. Nothing is changed beyond the bounded multipliers above — thresholds stay human decisions.
+
+### Trade less, and only in good conditions
+- **Regime** ([regime.ts](src/lib/paper/regime.ts)): India VIX from the NSE indices file + NIFTY vs its 20-day average. Calm → normal; VIX ≥ 18, a ≥ 10% VIX jump or a choppy NIFTY → half size, max 3 positions; VIX ≥ 25 → no new recommended trades. In a clear trend only the with-trend side is recommended.
+- **Risk rules** ([risk.ts](src/lib/paper/risk.ts)): 2% daily loss limit; max 5 open; max 2 per sector; ≤ 25% of capital per position; stocks with ATR > 3% get proportionally fewer shares; an 8% drawdown pauses recommended trades until **Resume** on the Scorecard page.
+- A trade blocked by a rule is still paper-traded as **shadow** with its `riskNote`, so each rule's value is measured.
+- **Exits**: stop moves to entry once a candle closes 1R in profit (status `breakeven`); square-off at 15:15.
+
+### Momentum + quality portfolio (`/portfolio`)
+₹10 lakh paper basket from the fundamentals universe: above the 200-day average, positive 6/12-month momentum (skipping the last month), quality ≥ 50, ROE ≥ 12%, debt/equity ≤ 1.5 (banks exempt). Ranked 50/50 momentum/quality, top 12 (fewer if fewer qualify), ≤ 3 per sector, equal weight, 0.3% round-trip costs. Rebalanced on the first session of each month (nightly `portfolio` step); valued nightly against NIFTY 50 (`portfolio_rebalances`, `portfolio_nav`).
+
+### Automation
+| What | When | Where |
+|---|---|---|
+| Weekly scorecard email | Fridays, nightly `weekly` step | [learn/weekly.ts](src/lib/learn/weekly.ts) |
+| Health check (NSE files, plan, paper trades, report, scans, email/Telegram config) | nightly; alerts once a day from the 21:00 run | [learn/health.ts](src/lib/learn/health.ts) |
+| Telegram alerts | plan/live entries, exits, daily report, weekly, health | [notify.ts](src/lib/notify.ts) |
+
+**Telegram setup (free):** in Telegram open **@BotFather** → `/newbot` → copy the token into `TELEGRAM_BOT_TOKEN`. Send your new bot any message, open `https://api.telegram.org/bot<token>/getUpdates`, copy `message.chat.id` into `TELEGRAM_CHAT_ID`. Add both in Vercel → Settings → Environment Variables and redeploy.
 

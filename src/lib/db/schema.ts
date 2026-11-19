@@ -106,6 +106,42 @@ export const SCHEMA: string[] = [
     data jsonb not null,
     emailed text
   )`,
+  // Learning loop: each exchange signal's hit rate per day (aggregated, a few dozen rows a day),
+  // the agent vs baseline strategies per day, and learned weights.
+  `create table if not exists signal_days (
+    day text not null,
+    key text not null,
+    id text not null,
+    label text not null,
+    effect text not null,
+    n integer not null,
+    correct integer not null,
+    sum_ret double precision not null,
+    correct_cc integer not null,
+    sum_ret_cc double precision not null,
+    primary key (day, key)
+  )`,
+  `create table if not exists baseline_days (
+    day text primary key,
+    data jsonb not null
+  )`,
+  `create table if not exists learned (
+    key text primary key,
+    updated_at timestamptz not null default now(),
+    data jsonb not null
+  )`,
+  // Momentum + quality portfolio: one row per rebalance, and the daily value vs NIFTY 50.
+  `create table if not exists portfolio_rebalances (
+    day text primary key,
+    created_at timestamptz not null default now(),
+    data jsonb not null
+  )`,
+  `create table if not exists portfolio_nav (
+    day text primary key,
+    nav double precision not null,
+    nifty double precision,
+    data jsonb
+  )`,
   `create table if not exists audit_log (
     id bigserial primary key,
     at timestamptz not null default now(),

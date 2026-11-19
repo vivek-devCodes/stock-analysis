@@ -123,7 +123,8 @@ async function backfillHistory(date: string): Promise<number> {
   return n;
 }
 
-async function loadHistory(date: string): Promise<History> {
+/** Delivery / volume averages over the stored sessions before `date` (also used to rebuild past days for the scorecard). */
+export async function loadHistory(date: string): Promise<History> {
   const db = await getDb();
   const out: History = new Map();
   if (!db) return out;
