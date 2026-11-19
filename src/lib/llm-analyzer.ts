@@ -6,6 +6,28 @@ const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY ?? "" });
 
 const MODEL = "gemini-2.5-flash";
 
+const KEY_HELP = "Create a free key at https://aistudio.google.com/apikey, set it as GEMINI_API_KEY in .env.local (and in Vercel), then restart the server";
+
+/** Run a Gemini call, failing early with a clear message when the key is missing and translating Google's errors. */
+async function gemini<T>(call: () => Promise<T>): Promise<T> {
+  if (!process.env.GEMINI_API_KEY?.trim()) throw new Error(`GEMINI_API_KEY is not set. ${KEY_HELP}.`);
+  try {
+    return await call();
+  } catch (error) {
+    const raw = error instanceof Error ? error.message : String(error);
+    if (/PERMISSION_DENIED|API_KEY_INVALID|API key not valid|"code":\s*40[13]\b/i.test(raw)) {
+      throw new Error(`Google rejected the Gemini API key (permission denied). The key may be wrong, revoked, restricted to other APIs, or from a project without the Generative Language API enabled. ${KEY_HELP}.`);
+    }
+    if (/RESOURCE_EXHAUSTED|"code":\s*429\b/i.test(raw)) {
+      throw new Error("Gemini free-tier quota is used up for now. Wait a minute (or until tomorrow for the daily limit) and try again.");
+    }
+    if (/UNAVAILABLE|"code":\s*503\b|overloaded/i.test(raw)) {
+      throw new Error("Gemini is overloaded right now. Try again in a few minutes.");
+    }
+    throw error;
+  }
+}
+
 /* ------------------------------------------------------------------ */
 /*  Schema for structured LLM output                                  */
 /* ------------------------------------------------------------------ */
@@ -277,7 +299,7 @@ export async function runLLMAnalysis(
   console.log(`[LLM] Sending analysis request to ${MODEL} with ${stocks.length} stocks...`);
   const startTime = Date.now();
 
-  const response = await ai.models.generateContent({
+  const response = await gemini(() => ai.models.generateContent({
     model: MODEL,
     contents: prompt,
     config: {
@@ -286,7 +308,7 @@ export async function runLLMAnalysis(
       temperature: 0.3,
       maxOutputTokens: 8192,
     },
-  });
+  }));
 
   const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
   console.log(`[LLM] Response received in ${elapsed}s`);
@@ -363,11 +385,11 @@ Provide:
 5. Risk factors
 6. 1-week and 1-month outlook`;
 
-  const response = await ai.models.generateContent({
+  const response = await gemini(() => ai.models.generateContent({
     model: MODEL,
     contents: prompt,
     config: { temperature: 0.3, maxOutputTokens: 2048 },
-  });
+  }));
 
   return response.text ?? "Analysis unavailable.";
 }
