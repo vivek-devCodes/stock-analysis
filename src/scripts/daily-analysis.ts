@@ -304,8 +304,9 @@ async function main() {
 
   if (args.includes("--test-email")) {
     log("Testing email connection...");
-    const ok = await testEmailConnection();
-    process.exit(ok ? 0 : 1);
+    const r = await testEmailConnection();
+    log(r.ok ? `SMTP OK${r.warning ? ` (${r.warning})` : ""}` : `SMTP failed: ${r.error}`);
+    process.exit(r.ok ? 0 : 1);
   }
 
   if (args.includes("--cron")) {

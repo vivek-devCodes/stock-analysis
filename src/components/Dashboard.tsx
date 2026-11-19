@@ -691,7 +691,7 @@ export function Dashboard({ initialSymbol }: { initialSymbol: string }) {
           testEmailLoading={testEmailLoading}
           onTrigger={async () => {
             setReportLoading(true);
-            setReportStatus("Collecting NSE/BSE & Yahoo data, calculating indicators, running Gemini 2.5 Flash deep analysis...");
+            setReportStatus("Collecting NSE/BSE & Yahoo data, calculating indicators, running Gemini Flash deep analysis...");
             try {
               const res = await fetch("/api/daily-report", {
                 method: "POST",
@@ -717,9 +717,9 @@ export function Dashboard({ initialSymbol }: { initialSymbol: string }) {
               const res = await fetch("/api/daily-report?action=test-email");
               const json = await res.json();
               if (json.success) {
-                setReportStatus("✅ SMTP email connection verified successfully! Emails can be delivered.");
+                setReportStatus(json.message?.includes("REPORT_RECIPIENTS") ? `⚠️ ${json.message}` : "✅ SMTP email connection verified successfully! Emails can be delivered.");
               } else {
-                setReportStatus(`❌ SMTP connection failed: ${json.error || json.message}`);
+                setReportStatus(`❌ Email test failed: ${json.error || json.message}`);
               }
             } catch (err) {
               setReportStatus(`❌ Test failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -865,7 +865,7 @@ function DailyReportModal({
               <strong> post-market digest at 16:15 IST</strong> (Mon–Fri), each with every decision, its evidence and the rules applied.
               This Gemini report runs <strong>on demand</strong> with the buttons below: it aggregates NSE/BSE and Yahoo Finance data across
               major sectors, computes indicators (RSI, MACD, Bollinger Bands, ATR, moving averages) and asks
-              <strong> Google Gemini 2.5 Flash</strong> for intraday, short-term and long-term ideas, emailed to you.
+              <strong> Google Gemini Flash</strong> for intraday, short-term and long-term ideas, emailed to you.
             </p>
           </div>
 

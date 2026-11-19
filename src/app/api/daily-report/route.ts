@@ -15,8 +15,12 @@ export async function GET(request: NextRequest) {
 
   if (action === "test-email") {
     try {
-      const ok = await testEmailConnection();
-      return Response.json({ success: ok, message: ok ? "SMTP connection verified" : "SMTP connection failed" });
+      const r = await testEmailConnection();
+      return Response.json({
+        success: r.ok,
+        message: r.ok ? `SMTP connection verified${r.warning ? `. ${r.warning}` : ""}` : "SMTP connection failed",
+        error: r.error,
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : "SMTP check error";
       return Response.json({ success: false, error: message }, { status: 500 });
