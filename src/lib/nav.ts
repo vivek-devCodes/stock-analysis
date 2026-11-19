@@ -4,6 +4,7 @@ import {
   CandlestickChart,
   Clock,
   Filter,
+  FlaskConical,
   LayoutDashboard,
   Landmark,
   LineChart,
@@ -37,6 +38,7 @@ export const NAV_GROUPS: Array<{ title: string; items: NavItem[] }> = [
       { href: "/dashboard/short-term", label: "Short Term", icon: LineChart, description: "1–2 week swing trades", tone: "text-accent" },
       { href: "/dashboard/long-term", label: "Long Term", icon: Landmark, description: "3–12 month positional ideas", tone: "text-up" },
       { href: "/dashboard/options", label: "Options", icon: Repeat, description: "CALL / PUT direction with ATM strike", tone: "text-[#b18cff]" },
+      { href: "/paper-trading", label: "Paper Trading", icon: FlaskConical, description: "The AI agent's intraday calls, traded on paper and scored automatically", tone: "text-[#fb923c]" },
     ],
   },
   {

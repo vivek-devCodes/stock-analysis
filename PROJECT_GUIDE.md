@@ -224,3 +224,26 @@ These came up while reading the code. They're useful context before you change a
 - **Data source fragility**: Yahoo and NSE endpoints are unofficial, and NSE needs browser-like headers and cookies. Both can break or rate-limit without warning.
 - `stock-universe.ts`: the "Infra" sector includes `LTTS.NS` (an IT services firm), and `MARKET_INDICES` / `getStocksBySector` aren't used.
 - `generate_stock_analysis_doc.py` and `test_style.py` are standalone Python helpers for the `.docx` documentation. The app doesn't use them.
+
+---
+
+## 11. Paper trading (`/paper-trading`)
+
+Tests whether the AI agent's **intraday** calls are actually right, with no real money.
+
+**How a trade is opened** — [src/lib/paper/engine.ts](src/lib/paper/engine.ts)
+1. Between **09:30 and 14:30 IST** on market days, the intraday scanner shortlists the strongest setups (`shortlist("intraday")`).
+2. Each one runs through the full multi-agent pipeline (`runAnalysis`, horizon `intraday`).
+3. Every **BUY / SELL / WATCHLIST** call is entered immediately at the live price, using the agent's own stop and first target. Size: ₹1,00,000 capital, 1% risk per trade.
+4. Directional setups the agent rejected (**NO TRADE**) are tracked as **shadow** trades. They're excluded from the headline numbers and only measure whether rejecting them was right.
+
+**What triggers it:** the Vercel cron `/api/cron/paper-trade` (Mon–Fri, ~09:35 IST); the page's **Auto-trade** switch, which runs once per day while the page is open and retries every 30 minutes if nothing was entered; or the **Run agent now** button. A stock is traded at most once per day.
+
+**How a trade is closed** — [src/lib/paper/rules.ts](src/lib/paper/rules.ts), tested by `npm run test:paper`
+- 5-minute candles after entry are replayed. The trade exits at the target or the stop-loss, whichever is reached first, otherwise it's squared off at **15:15 IST**.
+- Fills are conservative: if one candle touches both levels, the stop counts first, and a gap past the stop exits at the worse open price.
+- P&L is after a 0.1% round-trip cost. A trade is **correct** when its net P&L is above zero.
+
+**Scoring** — [src/lib/paper/stats.ts](src/lib/paper/stats.ts): win rate, target/stop/square-off counts, net P&L, total profit and loss, profit factor and expectancy, split by verdict and side. Each specialist agent (technical, market, news…) is also scored on whether its bullish or bearish view matched the actual price move.
+
+**Storage:** the `paper_trades` and `paper_runs` tables when `DATABASE_URL` is set. Otherwise trades are kept in server memory, which is lost on restart; the page warns about this.
