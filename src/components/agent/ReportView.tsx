@@ -414,7 +414,7 @@ export function ReportView({ r }: { r: AnalysisReport }) {
         title="Analyst narrative"
         action={
           <span className={clsx("rounded px-1.5 py-0.5 text-[10px] font-semibold", r.narrativeBy === "gemini" ? "bg-accent/15 text-accent" : "bg-white/8 text-muted")}>
-            {r.narrativeBy === "gemini" ? "Written by Gemini" : "Template"}
+            {r.narrativeBy === "gemini" ? "Written by Gemini (older report)" : "Rule-based"}
           </span>
         }
       >

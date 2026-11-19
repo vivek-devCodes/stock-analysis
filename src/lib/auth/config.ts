@@ -20,7 +20,6 @@ export const JWT_AUDIENCE = "apex-desk-dashboard";
  * ROLES and list it against the paths it should reach.
  */
 export const ROUTE_POLICIES: Array<{ prefix: string; roles: readonly Role[] }> = [
-  { prefix: "/api/daily-report", roles: ["admin"] },
 ];
 export const DEFAULT_ROLES: readonly Role[] = ["admin"];
 

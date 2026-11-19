@@ -1,0 +1,35 @@
+# Sends the morning report email before the market opens (Mon–Fri).
+# GitHub's schedule is the primary trigger because Vercel's free plan can run a cron at any time
+# within its hour. Two runs: 08:10 and 08:35 IST. The app sends at most one email per day, so the
+# second run only matters if the first was late or failed.
+# Needs repository secrets (Settings → Secrets and variables → Actions):
+#   APEX_APP_URL     e.g. https://stock-analysis-roan.vercel.app
+#   APEX_CRON_SECRET the same value as CRON_SECRET in Vercel
+name: Morning report
+
+on:
+  schedule:
+    # 02:40 and 03:05 UTC = 08:10 and 08:35 IST, Monday–Friday
+    - cron: "40 2 * * 1-5"
+    - cron: "5 3 * * 1-5"
+  workflow_dispatch: {}
+
+permissions: {}
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Build and email the morning report
+        env:
+          APP_URL: ${{ secrets.APEX_APP_URL }}
+          CRON_SECRET: ${{ secrets.APEX_CRON_SECRET }}
+        run: |
+          if [ -z "$APP_URL" ] || [ -z "$CRON_SECRET" ]; then
+            echo "::error::APEX_APP_URL / APEX_CRON_SECRET are not set, so the morning report cannot be triggered."
+            exit 1
+          fi
+          curl --fail-with-body --silent --show-error --max-time 320 \
+            -H "Authorization: Bearer $CRON_SECRET" \
+            "$APP_URL/api/cron/morning-report"

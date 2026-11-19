@@ -106,6 +106,17 @@ export const SCHEMA: string[] = [
     data jsonb not null,
     emailed text
   )`,
+  `create table if not exists watchlist (
+    symbol text primary key,
+    position integer not null default 0,
+    added_at timestamptz not null default now()
+  )`,
+  `create table if not exists morning_reports (
+    day text primary key,
+    created_at timestamptz not null default now(),
+    status text not null,
+    html text
+  )`,
   `create table if not exists audit_log (
     id bigserial primary key,
     at timestamptz not null default now(),
