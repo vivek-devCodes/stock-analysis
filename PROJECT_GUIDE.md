@@ -14,11 +14,14 @@ A guide to how this codebase is organised and how data moves through it. For qui
    - A rule-based **BUY / HOLD / SELL** verdict with reasons
    - A statistical price **forecast** with a confidence band
    - News headlines with keyword-based sentiment
-   - A watchlist and price/volume **alerts**, stored in the browser
-2. **Daily AI report pipeline** (backend job). Before the Indian market opens (8:45 AM IST, Mon–Fri), it:
-   - Analyses about 40 NSE stocks across 10 sectors using the same indicator and forecast engine
-   - Sends all of that data to **Google Gemini** (`gemini-2.5-flash`) for structured recommendations
-   - Emails an HTML report (intraday, short-term and long-term picks, stocks to avoid, sector view, news)
+   - A watchlist (saved in the database) and price/volume **alerts** (stored in the browser)
+2. **Morning report** (automatic email). Every weekday before the open (08:10–08:35 IST), it emails:
+   - Index snapshot (NIFTY 50, SENSEX, BANK NIFTY, INDIA VIX) and the market regime
+   - Today's intraday trade plan (built overnight from NSE end-of-day data)
+   - The AI Analyst's approved calls from the pre-market scan
+   - Every watchlist stock: last price, rule-based signal, RSI, trend, support / resistance
+
+Everything is computed by the app's own rules. **No external AI service (Gemini, ChatGPT, Claude…) and no AI API key is used.**
 
 > This is research tooling, not investment advice.
 
@@ -32,9 +35,8 @@ A guide to how this codebase is organised and how data moves through it. For qui
 | Styling | Tailwind CSS v4 (through `@tailwindcss/turbopack`), Geist fonts |
 | Charts | `lightweight-charts` v5 (TradingView) |
 | Icons | `lucide-react` |
-| LLM | `@google/genai` (Gemini 2.5 Flash, JSON-schema output) |
 | Email | `nodemailer` (SMTP; Gmail App Password recommended) |
-| Scheduling | `node-cron` |
+| Scheduling | Vercel Cron + GitHub Actions (see §7) |
 | Script runner | `tsx`, with `dotenv` for the `.env` file |
 | Market data | Yahoo Finance public endpoints (no key needed); NSE live market server (free, no key); NSE / BSE official end-of-day report files (see §12) |
 
@@ -56,9 +58,11 @@ stock-analysis/
 │   │       ├── quote/route.ts        GET  lightweight quote (used by alert polling)
 │   │       ├── search/route.ts       GET  symbol search / autocomplete
 │   │       ├── market/route.ts       GET  index ticker strip (Nifty, Sensex, S&P, BTC…)
-│   │       └── daily-report/route.ts GET status / SMTP test, POST run the AI pipeline
+│   │       ├── watchlist/route.ts    GET/PUT the saved watchlist (read by the morning report)
+│   │       ├── morning-report/route.ts GET preview / status, POST send now
+│   │       └── cron/morning-report/  the scheduled 08:30 IST email
 │   ├── components/
-│   │   ├── Dashboard.tsx         # The whole UI: search, watchlist, analysis panels, alerts, report modal
+│   │   ├── Dashboard.tsx         # The whole UI: search, watchlist, analysis panels, alerts
 │   │   └── PriceChart.tsx        # lightweight-charts: price + volume, RSI, MACD panes
 │   ├── lib/                      # Pure logic, shared by the API and the daily script
 │   │   ├── types.ts              # Shared types: Candle, Quote, Indicators, Insight, Forecast…
@@ -66,15 +70,15 @@ stock-analysis/
 │   │   ├── indicators.ts         # SMA, EMA, RSI, MACD, BB, ATR, Stochastic, vol, pivot S/R
 │   │   ├── forecast.ts           # Ensemble statistical forecast
 │   │   ├── analysis.ts           # Scoring engine → BUY/HOLD/SELL insight
-│   │   ├── llm-analyzer.ts       # Gemini prompt + JSON schema for the daily report
-│   │   ├── email-template.ts     # DailyReport types + HTML email builder
-│   │   ├── email-service.ts      # Nodemailer transport, send + verify
+│   │   ├── reports/morning.ts    # Morning report: data collection + email layout
+│   │   ├── reports/morning-run.ts # Once-a-day send, preview, history
+│   │   ├── watchlist-store.ts    # Server-side watchlist (DB → WATCHLIST_SYMBOLS → default)
+│   │   ├── email-service.ts      # Nodemailer transport, send + verify, readable SMTP errors
 │   │   ├── stock-universe.ts     # Sector → NSE symbol lists, Nifty 50 list
-│   │   ├── nse-scraper.ts        # NSE India cookie-based scraper (gainers/losers/sectors) — not used yet
-│   │   ├── watchlist.ts          # localStorage helpers (watchlist, alerts, events)
+│   │   ├── watchlist.ts          # localStorage helpers (browser copy of the watchlist, alerts, events)
 │   │   └── format.ts             # Price/number/percent formatting, clsx
 │   └── scripts/
-│       └── daily-analysis.ts     # Daily pipeline: run once, --cron, or --test-email
+│       └── test-email.ts         # npm run test-email: check the SMTP settings
 ├── generate_stock_analysis_doc.py  # python-docx script that produced Stock_Analysis_System_Documentation.docx
 ├── test_style.py                   # Small python-docx table-shading test
 ├── .env.example                    # Required environment variables
@@ -94,13 +98,11 @@ cp .env.example .env        # fill in the keys you need (see §8)
 npm run dev                 # dashboard at http://localhost:3000
 npm run build && npm start  # production build
 
-npm run daily-report        # run the AI pipeline once and send the email
-npm run daily-report:cron   # long-running scheduler (Mon–Fri 03:15 UTC = 08:45 IST)
 npm run test-email          # check the SMTP credentials only
 npm run lint
 ```
 
-The dashboard works **without any API keys**. Only the daily report needs `GEMINI_API_KEY` and the SMTP settings.
+The app needs **no API keys**. Only the emails need the SMTP settings.
 
 ---
 
@@ -169,21 +171,20 @@ A simple keyword count on each headline: +1 for each positive word (surge, beat,
 
 ---
 
-## 7. Data flow: the daily AI report
+## 7. The morning report (08:30 IST email)
 
-[src/scripts/daily-analysis.ts](src/scripts/daily-analysis.ts) → `runDailyAnalysis()`
+[reports/morning.ts](src/lib/reports/morning.ts) and [reports/morning-run.ts](src/lib/reports/morning-run.ts)
 
-1. **Market context**: Nifty, Sensex and Bank Nifty prices from Yahoo (`fetchIndexQuotes`).
-2. **Stock selection**: the first 4 symbols of each of the 10 sectors in [stock-universe.ts](src/lib/stock-universe.ts), about 40 stocks after removing duplicates.
-3. **Per-stock analysis**: the same pipeline as `/api/analyze`, run in batches of 8 with a 2-second pause between batches.
-4. **LLM step**: [llm-analyzer.ts](src/lib/llm-analyzer.ts) builds one large markdown prompt (market overview plus every stock's fundamentals, indicators, model verdict and news) and calls Gemini with a strict JSON `responseJsonSchema` at temperature 0.3. The response is normalised into `StockPick[]` and related types.
-5. **Report**: a `DailyReport` object is built and rendered by [email-template.ts](src/lib/email-template.ts) into an email-safe dark HTML layout, with a plain-text fallback.
-6. **Send**: [email-service.ts](src/lib/email-service.ts) sends to `REPORT_RECIPIENTS` over SMTP.
+1. **Pre-market scan**: runs the AI Analyst's pre-market session (rule-based agents, no external AI).
+2. **Data**: index quotes, today's intraday plan (built the night before from NSE files), the approved agent calls, and the saved watchlist. Each watchlist stock goes through the same indicator and scoring engine as `/analyze`.
+3. **Layout**: an email-safe light HTML layout (header, index tiles, plan table, agent calls, watchlist table, yesterday's paper-trading result) with a plain-text fallback.
+4. **Send once**: `morning_reports` holds one row per day. The first trigger claims it and later triggers skip. A failed send can be retried by the next trigger.
 
-There are three ways to start it:
-- CLI: `npm run daily-report` (runs once) or `npm run daily-report:cron` (keeps running on a schedule)
-- HTTP: `POST /api/daily-report` (the Dashboard's "AI Stock Recommendation Dispatcher" modal calls this)
-- SMTP check only: `GET /api/daily-report?action=test-email` or `npm run test-email`
+**Schedule (Mon–Fri):** GitHub Actions ([morning-report.yml](.github/workflows/morning-report.yml)) at 08:10 and 08:35 IST is the main trigger, because Vercel's free plan may run a cron any time within its hour. Vercel Cron (`0 3 * * 1-5` = 08:30 IST) is the backup. GitHub needs the repository secrets `APEX_APP_URL` and `APEX_CRON_SECRET` (the same value as Vercel's `CRON_SECRET`).
+
+**Watchlist:** the Stock Analyzer page saves every change to the `watchlist` table through `PUT /api/watchlist`. The first time it loads, it uploads the list already in the browser.
+
+**By hand:** open `/api/morning-report` to preview today's report in the browser (nothing is sent). `POST /api/morning-report` sends it now. `/api/morning-report?view=status` shows recent sends and checks the email settings.
 
 ---
 
@@ -191,10 +192,10 @@ There are three ways to start it:
 
 | Variable | Needed for | Notes |
 |---|---|---|
-| `GEMINI_API_KEY` | Daily report | Google AI Studio key |
-| `SMTP_HOST`, `SMTP_PORT` | Daily report | Defaults: `smtp.gmail.com`, `587` (465 switches on TLS) |
-| `SMTP_USER`, `SMTP_PASS` | Daily report | For Gmail, use an **App Password** |
-| `REPORT_RECIPIENTS` | Daily report | Comma-separated email addresses |
+| `SMTP_HOST`, `SMTP_PORT` | All emails | Defaults: `smtp.gmail.com`, `587` (465 switches on TLS) |
+| `SMTP_USER`, `SMTP_PASS` | All emails | For Gmail, use an **App Password** (not your normal password) |
+| `REPORT_RECIPIENTS` | All emails | Comma-separated email addresses |
+| `WATCHLIST_SYMBOLS` | Morning report | Optional fallback until a watchlist is saved |
 | `FINNHUB_API_KEY`, `NEWS_API_KEY`, `ALPHA_VANTAGE_API_KEY` | — | Listed in the template, but **no code reads them yet** |
 
 ---
@@ -207,8 +208,9 @@ There are three ways to start it:
 | `GET /api/quote` | `symbol` | `{ quote }` (5-day chart meta) |
 | `GET /api/search` | `q` | `{ results: SearchResult[] }` |
 | `GET /api/market` | — | `{ indices, asOf }` for ^NSEI, ^BSESN, ^NSEBANK, ^GSPC, ^IXIC, ^DJI, BTC-USD |
-| `GET /api/daily-report` | `action=test-email` (optional) | Status info or the SMTP check result |
-| `POST /api/daily-report` | — | Runs the full pipeline and returns `{ success, report }` |
+| `GET/PUT /api/watchlist` | `{ symbols }` on PUT | The saved watchlist |
+| `GET /api/morning-report` | `view=status` (optional) | Today's report as HTML, or send history + SMTP check |
+| `POST /api/morning-report` | — | Sends the morning report now |
 
 ---
 
@@ -216,11 +218,7 @@ There are three ways to start it:
 
 These came up while reading the code. They're useful context before you change anything.
 
-- **`nse-scraper.ts` is never imported.** The daily report's `topGainers`, `topLosers` and `sectorPerformance` are always empty arrays, so Gemini gets no breadth data. The index `change` field is also hard-coded to `0`, so the email's index cards show a ▲ 0.00 absolute change.
-- **`analyzeStockDeep()`** in `llm-analyzer.ts` is exported but nothing calls it.
 - **Alert type `news`** is defined in `AlertRule` but never evaluated. **`volatility_spike`** uses the same check as `pct_change`.
-- **`POST /api/daily-report` has no authentication.** Anyone who can reach the server can trigger a Gemini call and an email send.
-- **Cron runs in-process** (`node-cron`). The machine has to be awake and the process running at 03:15 UTC. Deploying to a serverless host would need an external scheduler that calls the POST route.
 - **Data source fragility**: Yahoo and NSE endpoints are unofficial, and NSE needs browser-like headers and cookies. Both can break or rate-limit without warning.
 - `stock-universe.ts`: the "Infra" sector includes `LTTS.NS` (an IT services firm), and `MARKET_INDICES` / `getStocksBySector` aren't used.
 - `generate_stock_analysis_doc.py` and `test_style.py` are standalone Python helpers for the `.docx` documentation. The app doesn't use them.

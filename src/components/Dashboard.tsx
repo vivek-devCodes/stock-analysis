@@ -1,6 +1,6 @@
 "use client";
 
-import { Bell, Loader2, Mail, Plus, Search, Sparkles, Star, Trash2, TrendingDown, TrendingUp, X } from "lucide-react";
+import { Bell, Loader2, Plus, Search, Star, Trash2, TrendingDown, TrendingUp, X } from "lucide-react";
 import { INDEX_LABELS, useMarket } from "./shell/market-store";
 import { WatchlistAdder } from "./WatchlistAdder";
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -46,16 +46,26 @@ export function Dashboard({ initialSymbol }: { initialSymbol: string }) {
   const [alerts, setAlerts] = useState<AlertRule[]>([]);
   const [events, setEvents] = useState<AlertEvent[]>([]);
   const [alertOpen, setAlertOpen] = useState(false);
-  const [reportModalOpen, setReportModalOpen] = useState(false);
-  const [reportLoading, setReportLoading] = useState(false);
-  const [reportStatus, setReportStatus] = useState<string | null>(null);
-  const [testEmailLoading, setTestEmailLoading] = useState(false);
   const searchTimer = useRef<number | null>(null);
 
   useEffect(() => {
-    setWatchlist(loadWatchlist());
+    const local = loadWatchlist();
+    setWatchlist(local);
     setAlerts(loadJson<AlertRule[]>(ALERT_KEY, []));
     setEvents(loadJson<AlertEvent[]>(EVENT_KEY, []));
+    // The server copy feeds the 08:30 morning email. Use it when saved; otherwise upload this browser's list once.
+    void fetch("/api/watchlist")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((json: { symbols: string[]; saved: boolean } | null) => {
+        if (!json) return;
+        if (json.saved) {
+          setWatchlist(json.symbols);
+          saveWatchlist(json.symbols);
+        } else {
+          void fetch("/api/watchlist", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ symbols: local }) });
+        }
+      })
+      .catch(() => {});
   }, []);
 
   /** silent = background refresh: no spinner, and keep the current data if it fails. */
@@ -206,6 +216,7 @@ export function Dashboard({ initialSymbol }: { initialSymbol: string }) {
   const persistWatchlist = (next: string[]) => {
     setWatchlist(next);
     saveWatchlist(next);
+    void fetch("/api/watchlist", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ symbols: next }) }).catch(() => {});
   };
 
   const onSearch = (event: FormEvent) => {
@@ -320,13 +331,6 @@ export function Dashboard({ initialSymbol }: { initialSymbol: string }) {
           {events.length > 0 && (
             <span className="rounded-full bg-down px-1.5 text-[10px] text-white">{events.length}</span>
           )}
-        </button>
-        <button
-          onClick={() => setReportModalOpen(true)}
-          className="inline-flex items-center gap-2 rounded-xl border border-accent/40 bg-accent/10 px-3 py-2 text-sm font-medium text-accent hover:bg-accent/20 transition-colors"
-        >
-          <Mail className="h-4 w-4" />
-          Daily AI Report
         </button>
         </div>
       </div>
@@ -681,54 +685,6 @@ export function Dashboard({ initialSymbol }: { initialSymbol: string }) {
           }}
         />
       )}
-
-      {reportModalOpen && (
-        <DailyReportModal
-          watchlist={watchlist}
-          onClose={() => setReportModalOpen(false)}
-          loading={reportLoading}
-          status={reportStatus}
-          testEmailLoading={testEmailLoading}
-          onTrigger={async () => {
-            setReportLoading(true);
-            setReportStatus("Collecting NSE/BSE & Yahoo data, calculating indicators, running Gemini 2.5 Flash deep analysis...");
-            try {
-              const res = await fetch("/api/daily-report", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ watchlist }),
-              });
-              const json = await res.json();
-              if (json.success) {
-                setReportStatus("✅ Report generated and email dispatched to configured recipients successfully!");
-              } else {
-                setReportStatus(`❌ Report failed: ${json.error || "Unknown error"}`);
-              }
-            } catch (err) {
-              setReportStatus(`❌ Error: ${err instanceof Error ? err.message : String(err)}`);
-            } finally {
-              setReportLoading(false);
-            }
-          }}
-          onTestEmail={async () => {
-            setTestEmailLoading(true);
-            setReportStatus("Testing SMTP email credentials...");
-            try {
-              const res = await fetch("/api/daily-report?action=test-email");
-              const json = await res.json();
-              if (json.success) {
-                setReportStatus("✅ SMTP email connection verified successfully! Emails can be delivered.");
-              } else {
-                setReportStatus(`❌ SMTP connection failed: ${json.error || json.message}`);
-              }
-            } catch (err) {
-              setReportStatus(`❌ Test failed: ${err instanceof Error ? err.message : String(err)}`);
-            } finally {
-              setTestEmailLoading(false);
-            }
-          }}
-        />
-      )}
     </div>
   );
 }
@@ -825,121 +781,3 @@ function AlertModal({
   );
 }
 
-function DailyReportModal({
-  watchlist,
-  onClose,
-  loading,
-  status,
-  testEmailLoading,
-  onTrigger,
-  onTestEmail,
-}: {
-  watchlist: string[];
-  onClose: () => void;
-  loading: boolean;
-  status: string | null;
-  testEmailLoading: boolean;
-  onTrigger: () => void;
-  onTestEmail: () => void;
-}) {
-  return (
-    <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
-      <div className="panel max-h-[90vh] w-full max-w-2xl overflow-auto p-6 border-accent/30 shadow-2xl">
-        <div className="flex items-center justify-between border-b border-line pb-3">
-          <div className="flex items-center gap-2">
-            <Sparkles className="h-5 w-5 text-accent" />
-            <h2 className="text-lg font-semibold">AI Stock Recommendation Dispatcher</h2>
-          </div>
-          <button onClick={onClose} className="rounded-lg p-1 hover:bg-white/10">
-            <X className="h-5 w-5" />
-          </button>
-        </div>
-
-        <div className="mt-4 space-y-4 text-sm">
-          <div className="rounded-xl bg-accent/10 border border-accent/20 p-4">
-            <h3 className="font-semibold text-accent flex items-center gap-2">
-              <Mail className="h-4 w-4" /> Gemini daily report (on demand)
-            </h3>
-            <p className="mt-1 text-xs leading-relaxed text-muted">
-              Scheduled emails now come from the <strong>autonomous AI Analyst</strong>: a <strong>pre-market digest at 08:30 IST</strong> and a
-              <strong> post-market digest at 16:15 IST</strong> (Mon–Fri), each with every decision, its evidence and the rules applied.
-              This Gemini report runs <strong>on demand</strong> with the buttons below: it aggregates NSE/BSE and Yahoo Finance data across
-              major sectors, computes indicators (RSI, MACD, Bollinger Bands, ATR, moving averages) and asks
-              <strong> Google Gemini 2.5 Flash</strong> for intraday, short-term and long-term ideas, emailed to you.
-            </p>
-          </div>
-
-          <div className="grid gap-3 sm:grid-cols-2">
-            <div className="rounded-xl border border-line bg-card p-3">
-              <p className="text-xs font-semibold text-muted uppercase">What&apos;s Included in Email</p>
-              <ul className="mt-2 space-y-1 text-xs text-foreground/80 list-disc list-inside">
-                <li>Nifty 50, Sensex & Bank Nifty sentiment</li>
-                <li>🎯 Top 3-5 Intraday stocks (Entry, Target, Stop Loss)</li>
-                <li>📈 Top 3-5 Short-term swing picks (1-2 weeks)</li>
-                <li>🏦 Top 3-5 Long-term value picks (3-6 months)</li>
-                <li>🔴 Stocks to avoid &amp; high risk alerts</li>
-                <li>📊 Sector rotation &amp; hot sector ranking</li>
-              </ul>
-            </div>
-
-            <div className="rounded-xl border border-line bg-card p-3">
-              <p className="text-xs font-semibold text-muted uppercase">Automation &amp; Config</p>
-              <ul className="mt-2 space-y-1 text-xs text-foreground/80">
-                <li>• <strong>Schedule:</strong> on demand (scheduled emails = AI Analyst digests, 08:30 &amp; 16:15 IST)</li>
-                <li>• <strong>CLI Command:</strong> <code className="text-accent">npm run daily-report</code></li>
-                <li>• <strong>Setup:</strong> Set <code className="text-warn">GEMINI_API_KEY</code> &amp; <code className="text-warn">SMTP_PASS</code> in <code className="text-muted">.env</code></li>
-              </ul>
-            </div>
-          </div>
-
-          <div className="rounded-xl border border-line bg-card p-3 text-xs">
-            <p className="font-semibold uppercase text-muted">⭐ Your watchlist in the email</p>
-            <p className="mt-1 text-foreground/80">
-              &quot;Run &amp; Send Report Now&quot; includes your {watchlist.length} watchlist stocks. If this report is triggered
-              without this browser (e.g. via its API), it reads the{" "}
-              <code className="text-warn">WATCHLIST_SYMBOLS</code> environment variable on Vercel instead — paste this there:
-            </p>
-            <code className="mt-2 block select-all break-all rounded-lg bg-[#0a0f16] p-2 text-accent">
-              {watchlist.join(",")}
-            </code>
-          </div>
-
-          {status && (
-            <div className="rounded-xl border border-line bg-[#0a0f16] p-3 text-xs leading-relaxed font-mono">
-              {status}
-            </div>
-          )}
-
-          <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
-            <button
-              onClick={onTestEmail}
-              disabled={testEmailLoading || loading}
-              className="inline-flex items-center gap-2 rounded-xl border border-line px-4 py-2 text-xs font-medium hover:bg-white/5 disabled:opacity-50"
-            >
-              {testEmailLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Mail className="h-4 w-4" />}
-              Test Email Credentials
-            </button>
-
-            <button
-              onClick={onTrigger}
-              disabled={loading || testEmailLoading}
-              className="inline-flex items-center gap-2 rounded-xl bg-accent px-5 py-2.5 text-xs font-semibold text-white shadow-lg shadow-accent/25 hover:bg-accent/90 disabled:opacity-50"
-            >
-              {loading ? (
-                <>
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  Analyzing &amp; Sending (takes ~30s)...
-                </>
-              ) : (
-                <>
-                  <Sparkles className="h-4 w-4" />
-                  Run &amp; Send Report Now
-                </>
-              )}
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}

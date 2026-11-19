@@ -1,6 +1,4 @@
 import nodemailer from "nodemailer";
-import type { DailyReport } from "./email-template";
-import { buildEmailHTML } from "./email-template";
 
 /* ------------------------------------------------------------------ */
 /*  Transporter configuration                                          */
@@ -28,124 +26,31 @@ function createTransporter() {
 }
 
 /* ------------------------------------------------------------------ */
-/*  Send daily report email                                            */
+/*  Errors and connectivity check                                      */
 /* ------------------------------------------------------------------ */
 
-export async function sendDailyReport(
-  report: DailyReport,
-  recipients?: string[],
-): Promise<{ success: boolean; messageId?: string; error?: string }> {
-  const to = recipients ?? (process.env.REPORT_RECIPIENTS ?? "").split(",").map((e) => e.trim()).filter(Boolean);
-
-  if (!to.length) {
-    return { success: false, error: "No recipients configured. Set REPORT_RECIPIENTS in .env." };
+/** Turn nodemailer/Gmail errors into a message that says what to fix. */
+export function explainSmtpError(error: unknown): string {
+  const e = error as { code?: string; responseCode?: number; message?: string };
+  const msg = e?.message ?? String(error);
+  if (/credentials missing/i.test(msg)) return msg.split(String.fromCharCode(10))[0];
+  if (e?.code === "EAUTH" || e?.responseCode === 535 || e?.responseCode === 534) {
+    return "Gmail rejected the login. SMTP_PASS must be a 16-character Google App Password (Google Account > Security > 2-Step Verification > App passwords), not your normal Gmail password, and SMTP_USER must be the full Gmail address it was created for.";
   }
-
-  try {
-    const transporter = createTransporter();
-
-    const html = buildEmailHTML(report);
-
-    const subject = `📊 Daily Stock Report — ${report.date} | Market: ${report.marketOverview.marketSentiment} | Nifty ${report.marketOverview.nifty.changePercent >= 0 ? "+" : ""}${report.marketOverview.nifty.changePercent.toFixed(2)}%`;
-
-    const info = await transporter.sendMail({
-      from: `"Apex Desk — Stock Analysis" <${process.env.SMTP_USER}>`,
-      to: to.join(", "),
-      subject,
-      html,
-      text: buildPlainText(report),
-    });
-
-    console.log(`[Email] Report sent to ${to.join(", ")} — MessageID: ${info.messageId}`);
-    return { success: true, messageId: info.messageId };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Email send failed";
-    console.error("[Email] Failed:", message);
-    return { success: false, error: message };
+  if (e?.code === "ETIMEDOUT" || e?.code === "ECONNECTION" || e?.code === "ESOCKET" || e?.code === "ECONNREFUSED") {
+    return `Could not reach the mail server (${e.code}). Check SMTP_HOST (smtp.gmail.com) and SMTP_PORT (587).`;
   }
+  if (e?.code === "EDNS" || e?.code === "ENOTFOUND") return "SMTP_HOST could not be found. For Gmail use smtp.gmail.com.";
+  return msg;
 }
 
-/* ------------------------------------------------------------------ */
-/*  Plain-text fallback                                                */
-/* ------------------------------------------------------------------ */
-
-function buildPlainText(report: DailyReport): string {
-  const lines: string[] = [
-    `APEX DESK — DAILY STOCK REPORT`,
-    `Date: ${report.date}`,
-    ``,
-    `=== MARKET OVERVIEW ===`,
-    `Nifty 50: ₹${report.marketOverview.nifty.price.toFixed(2)} (${report.marketOverview.nifty.changePercent >= 0 ? "+" : ""}${report.marketOverview.nifty.changePercent.toFixed(2)}%)`,
-    `Sensex: ₹${report.marketOverview.sensex.price.toFixed(2)} (${report.marketOverview.sensex.changePercent >= 0 ? "+" : ""}${report.marketOverview.sensex.changePercent.toFixed(2)}%)`,
-    `Bank Nifty: ₹${report.marketOverview.bankNifty.price.toFixed(2)} (${report.marketOverview.bankNifty.changePercent >= 0 ? "+" : ""}${report.marketOverview.bankNifty.changePercent.toFixed(2)}%)`,
-    `Sentiment: ${report.marketOverview.marketSentiment} — ${report.marketOverview.sentimentReason}`,
-    ``,
-  ];
-
-  const addPicks = (title: string, picks: typeof report.intradayPicks) => {
-    lines.push(`=== ${title} ===`);
-    picks.forEach((p) => {
-      lines.push(`${p.recommendation} ${p.symbol} (${p.name})`);
-      lines.push(`  Price: ₹${p.currentPrice.toFixed(2)} → Target: ₹${p.targetPrice.toFixed(2)} | SL: ₹${p.stopLoss.toFixed(2)}`);
-      lines.push(`  Confidence: ${p.confidence}% | Risk: ${p.riskLevel} | Sector: ${p.sector}`);
-      lines.push(`  ${p.reasoning}`);
-      lines.push(``);
-    });
-  };
-
-  if (report.watchlist?.length) {
-    lines.push(`=== YOUR WATCHLIST ===`);
-    report.watchlist.forEach((w) => {
-      lines.push(`${w.recommendation} ${w.symbol} (${w.name}) — ${w.currency} ${w.price.toFixed(2)} (${w.changePercent >= 0 ? "+" : ""}${w.changePercent.toFixed(2)}%)`);
-      lines.push(`  10-day range (80%): ${w.rangeLow.toFixed(2)} – ${w.rangeHigh.toFixed(2)} | Support ${w.support?.toFixed(2) ?? "—"} | Resistance ${w.resistance?.toFixed(2) ?? "—"}`);
-      w.news.slice(0, 2).forEach((n) => lines.push(`  • ${n.title} (${n.publisher})`));
-      lines.push(``);
-    });
-  }
-
-  addPicks("INTRADAY PICKS", report.intradayPicks);
-  addPicks("SHORT-TERM PICKS (1-2 Weeks)", report.shortTermPicks);
-  addPicks("LONG-TERM PICKS (3-6 Months)", report.longTermPicks);
-
-  lines.push(`=== STOCKS TO AVOID ===`);
-  report.stocksToAvoid.forEach((s) => {
-    lines.push(`🔴 ${s.symbol} (${s.name}) — ${s.reason}`);
-  });
-  lines.push(``);
-
-  lines.push(`=== SECTOR ANALYSIS ===`);
-  report.sectorAnalysis.forEach((s) => {
-    lines.push(`${s.sector}: ${s.outlook} (${s.changePercent >= 0 ? "+" : ""}${s.changePercent.toFixed(2)}%) — Top: ${s.topStock}`);
-    lines.push(`  ${s.reasoning}`);
-  });
-  lines.push(``);
-
-  lines.push(`=== KEY NEWS ===`);
-  report.keyNews.forEach((n) => {
-    lines.push(`[${n.sentiment.toUpperCase()}] ${n.headline}`);
-    lines.push(`  Impact: ${n.impact}`);
-  });
-  lines.push(``);
-
-  lines.push(`---`);
-  lines.push(report.disclaimer);
-
-  return lines.join("\n");
-}
-
-/* ------------------------------------------------------------------ */
-/*  Test email connectivity                                            */
-/* ------------------------------------------------------------------ */
-
-export async function testEmailConnection(): Promise<boolean> {
+export async function testEmailConnection(): Promise<{ ok: boolean; error?: string; warning?: string }> {
   try {
-    const transporter = createTransporter();
-    await transporter.verify();
-    console.log("[Email] SMTP connection verified successfully.");
-    return true;
+    await createTransporter().verify();
+    const hasRecipients = (process.env.REPORT_RECIPIENTS ?? "").split(",").some((v) => v.trim());
+    return { ok: true, warning: hasRecipients ? undefined : "Login works, but REPORT_RECIPIENTS is empty, so reports have nowhere to go." };
   } catch (error) {
-    console.error("[Email] SMTP verification failed:", error instanceof Error ? error.message : error);
-    return false;
+    return { ok: false, error: explainSmtpError(error) };
   }
 }
 
@@ -186,14 +91,14 @@ export async function sendSignalEmail(params: {
   }
 }
 
-/** Send a pre-rendered HTML email (used by the agent scan digest). */
+/** Send a pre-rendered HTML email (agent digests and the morning report). */
 export async function sendHtmlEmail(subject: string, html: string, text: string): Promise<{ success: boolean; error?: string }> {
   const to = (process.env.REPORT_RECIPIENTS ?? "").split(",").map((e) => e.trim()).filter(Boolean);
   if (!to.length) return { success: false, error: "REPORT_RECIPIENTS not configured" };
   try {
-    await createTransporter().sendMail({ from: `"Apex Desk — AI Analyst" <${process.env.SMTP_USER}>`, to: to.join(", "), subject, html, text });
+    await createTransporter().sendMail({ from: `"Apex Desk" <${process.env.SMTP_USER}>`, to: to.join(", "), subject, html, text });
     return { success: true };
   } catch (error) {
-    return { success: false, error: error instanceof Error ? error.message : "Email send failed" };
+    return { success: false, error: explainSmtpError(error) };
   }
 }

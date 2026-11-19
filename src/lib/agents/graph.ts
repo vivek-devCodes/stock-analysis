@@ -4,7 +4,7 @@ import { claimAlert, markAlert, saveReport, type AlertKind } from "../db/repo";
 import { sendSignalEmail } from "../email-service";
 import { collectData, normaliseSymbol, validateData, type DataSnapshot } from "./data";
 import { detectConflicts, expectedValue, finalDecision, headlineFor, proposedDirection, riskAgent, scenarios, scoreAll, validate } from "./decision";
-import { downgrade, llmReview, templateNarrative } from "./llm";
+import { templateNarrative } from "./llm";
 import { CALIBRATION_META, fnoAgent, fundamentalAgent, marketAgent, newsAgent, ownershipAgent, quantAgent, technicalAgent } from "./specialists";
 import type { AgentId, AgentResult, AnalysisReport, Conflict, ExpectedValue, Horizon, NewsItemRef, RiskReview, ScoreBreakdown, ValidatorReport } from "./types";
 
@@ -178,33 +178,8 @@ async function assembleNode(s: S): Promise<Partial<S>> {
 
 async function reviewNode(s: S): Promise<Partial<S>> {
   const start = t0();
-  const report = { ...s.report! };
-  if (!s.dataOk) {
-    report.narrative = templateNarrative(report);
-    return { report, stages: [stage("LLM review", start, "skipped", "Data validation failed.")] };
-  }
-  const review = await llmReview(report);
-  if (!review) {
-    report.narrative = templateNarrative(report);
-    return { report, stages: [stage("LLM review", start, "skipped", process.env.GEMINI_API_KEY ? "Gemini call failed — template narrative used." : "GEMINI_API_KEY not set — template narrative used.")] };
-  }
-  report.narrative = review.narrative;
-  report.narrativeBy = "gemini";
-  const validator = { ...report.validator, llmConcerns: review.concerns };
-  if (review.downgrade) {
-    const v = downgrade(report.validation);
-    if (v !== report.validation) {
-      validator.llmDowngraded = true;
-      validator.conditions = [...validator.conditions, `Reviewer downgrade: ${review.downgradeReason}`];
-      report.validation = v;
-      validator.verdict = v;
-      report.decision = finalDecision(v, report.request.horizon, proposedDirection(report.request.horizon, report.agents.find((a) => a.agent === "technical"), report.agents.find((a) => a.agent === "fundamental")));
-      report.headline = headlineFor(report.decision, v, report.instrument.symbol, proposedDirection(report.request.horizon, report.agents.find((a) => a.agent === "technical"), report.agents.find((a) => a.agent === "fundamental")), report.request.horizon);
-      report.executable = v === "APPROVED" && report.executable;
-    }
-  }
-  report.validator = validator;
-  return { report, stages: [stage("LLM review", start, "done", review.downgrade ? "Gemini reviewer downgraded the verdict." : `Gemini reviewer raised ${review.concerns.length} concern(s).`)] };
+  const report = { ...s.report!, narrative: templateNarrative(s.report!), narrativeBy: "template" as const };
+  return { report, stages: [stage("Narrative", start, s.dataOk ? "done" : "skipped", s.dataOk ? "Written from the agents' evidence (rule-based, no external AI)." : "Data validation failed.")] };
 }
 
 async function persistNode(s: S): Promise<Partial<S>> {
