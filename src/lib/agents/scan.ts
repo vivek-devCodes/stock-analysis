@@ -31,7 +31,7 @@ const RANK: Record<Validation, number> = { APPROVED: 0, "APPROVED WITH CONDITION
 let lastRun: ScanRun | null = null;
 export const lastScanInMemory = () => lastRun;
 
-async function shortlist(horizon: Horizon): Promise<{ screened: number; symbols: string[] }> {
+export async function shortlist(horizon: Horizon): Promise<{ screened: number; symbols: string[] }> {
   const n = THRESHOLDS.scan.candidatesPerHorizon;
   const screen = await runScreen(MODE_OF[horizon]);
   const directional = (p: ScreenPick) => p.bias !== "neutral";
@@ -71,7 +71,7 @@ function toItem(r: AnalysisReport): ScanItem {
   };
 }
 
-async function mapLimit<T, R>(items: T[], limit: number, fn: (x: T) => Promise<R>): Promise<R[]> {
+export async function mapLimit<T, R>(items: T[], limit: number, fn: (x: T) => Promise<R>): Promise<R[]> {
   const out: R[] = new Array(items.length);
   let i = 0;
   await Promise.all(

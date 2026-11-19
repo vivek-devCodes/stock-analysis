@@ -57,6 +57,24 @@ export const SCHEMA: string[] = [
     emailed text
   )`,
   `create index if not exists scan_runs_started_idx on scan_runs (started_at desc)`,
+  // Paper trading: one simulated intraday trade per symbol per IST day. `data` holds the full trade.
+  `create table if not exists paper_trades (
+    id text primary key,
+    trade_day text not null,
+    symbol text not null,
+    status text not null default 'open',
+    opened_at timestamptz not null,
+    data jsonb not null,
+    unique (trade_day, symbol)
+  )`,
+  `create index if not exists paper_trades_day_idx on paper_trades (trade_day desc, opened_at desc)`,
+  `create index if not exists paper_trades_status_idx on paper_trades (status)`,
+  // One automatic paper-trading run per day (shared by the cron and the page's auto mode).
+  `create table if not exists paper_runs (
+    run_key text primary key,
+    at timestamptz not null default now(),
+    summary jsonb
+  )`,
   `create table if not exists audit_log (
     id bigserial primary key,
     at timestamptz not null default now(),
