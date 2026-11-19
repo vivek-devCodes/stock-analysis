@@ -330,7 +330,9 @@ export function Dashboard({ initialSymbol }: { initialSymbol: string }) {
         </div>
       </div>
 
-      <div className="grid gap-4 p-4 xl:grid-cols-[200px_minmax(0,1fr)_300px]">
+      <div className="space-y-4 p-4">
+      {/* Row 1: watchlist · quote header · verdict */}
+      <div className="grid items-start gap-4 xl:grid-cols-[200px_minmax(0,1fr)_300px]">
         <aside className="panel h-fit p-3">
           <div className="mb-2 flex items-center justify-between">
             <h2 className="text-xs font-semibold uppercase tracking-wider text-muted">Watchlist</h2>
@@ -379,7 +381,7 @@ export function Dashboard({ initialSymbol }: { initialSymbol: string }) {
           </div>
         </aside>
 
-        <main className="space-y-4">
+        <div className="min-w-0 space-y-4">
           {error && (
             <div className="panel border-down/40 p-4 text-sm text-down">{error}. Try a Yahoo-listed ticker such as RELIANCE.NS or AAPL.</div>
           )}
@@ -389,7 +391,6 @@ export function Dashboard({ initialSymbol }: { initialSymbol: string }) {
             </div>
           )}
           {data && quote && (
-            <>
               <section className="panel p-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
@@ -448,7 +449,28 @@ export function Dashboard({ initialSymbol }: { initialSymbol: string }) {
                   ))}
                 </div>
               </section>
+          )}
+        </div>
 
+        {data && (
+          <section className="panel h-fit p-4">
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted">Swing setup (1–2 weeks)</p>
+            <p className={clsx("mt-2 text-3xl font-semibold", toneClass(data.insight.recommendation).split(" ")[1])}>
+              {data.insight.recommendation}
+            </p>
+            <p className="mt-1 text-sm">{data.insight.headline}</p>
+            <p className="mt-1 text-xs text-muted">Setup score {data.insight.score > 0 ? `+${data.insight.score}` : data.insight.score}</p>
+            {data.insight.recommendation !== "HOLD" && (
+              <div className="mt-3">
+                <TrackBadge track={data.insight.track} detailed />
+              </div>
+            )}
+          </section>
+        )}
+      </div>
+
+      {/* Row 2: the chart gets the full page width */}
+      {data && quote && (
               <section className="panel p-3">
                 <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                   <div className="flex gap-1">
@@ -475,7 +497,13 @@ export function Dashboard({ initialSymbol }: { initialSymbol: string }) {
                 <PriceChart data={data} studies={studies} signals={signals} live={liveQuote} />
                 <SignalLegend signals={signals} />
               </section>
+      )}
 
+      {/* Row 3: analysis and news · risk, range and alerts */}
+      <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
+        <main className="min-w-0 space-y-4">
+          {data && quote && (
+            <>
               <section className="panel p-4">
                 <h2 className="text-sm font-semibold">Comprehensive analysis</h2>
                 <p className="mt-1 text-sm text-muted">{data.insight.summary}</p>
@@ -556,20 +584,6 @@ export function Dashboard({ initialSymbol }: { initialSymbol: string }) {
         <aside className="space-y-4">
           {data && (
             <>
-              <section className="panel p-4">
-                <p className="text-[11px] font-semibold uppercase tracking-wider text-muted">Swing setup (1–2 weeks)</p>
-                <p className={clsx("mt-2 text-3xl font-semibold", toneClass(data.insight.recommendation).split(" ")[1])}>
-                  {data.insight.recommendation}
-                </p>
-                <p className="mt-1 text-sm">{data.insight.headline}</p>
-                <p className="mt-1 text-xs text-muted">Setup score {data.insight.score > 0 ? `+${data.insight.score}` : data.insight.score}</p>
-                {data.insight.recommendation !== "HOLD" && (
-                  <div className="mt-3">
-                    <TrackBadge track={data.insight.track} detailed />
-                  </div>
-                )}
-              </section>
-
               <StockInsightPanel key={data.quote.symbol} symbol={data.quote.symbol} defaultOpen />
 
               <section className="panel p-4">
@@ -633,6 +647,7 @@ export function Dashboard({ initialSymbol }: { initialSymbol: string }) {
             </>
           )}
         </aside>
+      </div>
       </div>
 
       {alertOpen && (
