@@ -22,14 +22,16 @@ const STATUS: Record<SessionPlan["status"], string> = {
 function Execution({ ex }: { ex: PlanExecution }) {
   return (
     <div className="mt-3 rounded-lg border border-line p-2.5 text-xs">
-      <p className="font-semibold">Executed at the {dayLabel(ex.day)} open</p>
+      <p className="font-semibold">{ex.rows.some((r) => r.final === false) ? `Executing at the ${dayLabel(ex.day)} open — waiting for opening-range breakouts (until 11:00)` : `Executed at the ${dayLabel(ex.day)} open (opening-range breakout entries)`}</p>
       <ul className="mt-1 space-y-0.5">
         {ex.rows.map((r) => (
-          <li key={r.symbol} className={r.entered ? "text-up" : "text-muted"}>
-            {r.entered ? "✓" : "–"} <span className="font-medium text-foreground">{short(r.symbol)}</span> {r.reason}
+          <li key={r.symbol} className={r.entered ? "text-up" : r.final === false ? "text-warn" : "text-muted"}>
+            {r.entered ? "✓" : r.final === false ? "…" : "–"} <span className="font-medium text-foreground">{short(r.symbol)}</span> {r.reason}
+            {r.range && <span className="text-muted"> · range {r.range.low.toFixed(2)}–{r.range.high.toFixed(2)}</span>}
           </li>
         ))}
       </ul>
+      {ex.risk && ex.risk.length > 0 && <p className="mt-1 text-[11px] text-warn">Risk: {ex.risk.join(" · ")}</p>}
     </div>
   );
 }

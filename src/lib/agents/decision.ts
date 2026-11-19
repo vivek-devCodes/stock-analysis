@@ -41,8 +41,9 @@ export function bandOf(score: number | null): string {
  * Weighted score over the agents that could actually score. For a bearish setup the agents'
  * bullishness is inverted (100 − score), so the total measures support for the PROPOSED direction.
  */
-export function scoreAll(agents: AgentResult[], horizon: Horizon, direction: Bias): ScoreBreakdown {
-  const weights = WEIGHTS[horizon];
+export function scoreAll(agents: AgentResult[], horizon: Horizon, direction: Bias, adapted: Record<AgentId, number> | null = null): ScoreBreakdown {
+  // Adapted weights come from the learning loop (src/lib/learn) once there is enough paper-trading evidence.
+  const weights = adapted ?? WEIGHTS[horizon];
   let sum = 0;
   let used = 0;
   let total = 0;

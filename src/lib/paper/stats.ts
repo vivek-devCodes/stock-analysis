@@ -68,7 +68,7 @@ export function groupStats(trades: PaperTrade[]): GroupStats {
     losses: lossArr.length,
     winRate: closed.length ? winsArr.length / closed.length : null,
     targetHits: closed.filter((t) => t.status === "target").length,
-    stopHits: closed.filter((t) => t.status === "stop").length,
+    stopHits: closed.filter((t) => t.status === "stop" || t.status === "breakeven").length,
     squareOffs: closed.filter((t) => t.status === "square-off").length,
     netPnl: sum,
     grossProfit,
