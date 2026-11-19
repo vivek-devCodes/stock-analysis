@@ -386,6 +386,9 @@ export function Dashboard({ initialSymbol }: { initialSymbol: string }) {
           {error && (
             <div className="panel border-down/40 p-4 text-sm text-down">{error}. Try a Yahoo-listed ticker such as RELIANCE.NS or AAPL.</div>
           )}
+          {data?.notice && !error && (
+            <div className="panel border-accent/40 p-3 text-sm text-muted">{data.notice}</div>
+          )}
           {loading && !data && (
             <div className="panel flex h-80 items-center justify-center gap-2 text-muted">
               <Loader2 className="h-5 w-5 animate-spin" /> Loading market data…

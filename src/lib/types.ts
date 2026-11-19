@@ -159,6 +159,8 @@ export type AnalyzeResponse = {
   dailySignals?: import("./chart-studies").ChartSignal[];
   /** Chart candles plus earlier warm-up candles at the same interval (indicators are computed on these). */
   studyCandles?: Candle[];
+  /** Set when the analyzer switched to the other exchange's listing because this one had too little history. */
+  notice?: string;
 };
 
 export type MarketIndex = {
