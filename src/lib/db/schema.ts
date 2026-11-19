@@ -75,6 +75,37 @@ export const SCHEMA: string[] = [
     at timestamptz not null default now(),
     summary jsonb
   )`,
+  // Exchange data (NSE/BSE public end-of-day files). One market row per trading day, one row per
+  // stock per day. Full stock records are kept for recent days; older rows keep only the numbers
+  // needed for averages (close, volume, delivery %).
+  `create table if not exists exchange_days (
+    trade_date text primary key,
+    built_at timestamptz not null default now(),
+    market jsonb not null
+  )`,
+  `create table if not exists exchange_stocks (
+    trade_date text not null,
+    symbol text not null,
+    close double precision,
+    volume double precision,
+    delivery_pct double precision,
+    data jsonb,
+    primary key (trade_date, symbol)
+  )`,
+  `create index if not exists exchange_stocks_symbol_idx on exchange_stocks (symbol, trade_date desc)`,
+  // Next-session intraday plan (built after the close) and the daily paper-trading report.
+  `create table if not exists paper_plans (
+    made_on text primary key,
+    created_at timestamptz not null default now(),
+    status text not null,
+    data jsonb not null
+  )`,
+  `create table if not exists paper_reports (
+    day text primary key,
+    created_at timestamptz not null default now(),
+    data jsonb not null,
+    emailed text
+  )`,
   `create table if not exists audit_log (
     id bigserial primary key,
     at timestamptz not null default now(),

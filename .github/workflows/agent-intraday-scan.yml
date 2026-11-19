@@ -31,4 +31,9 @@ jobs:
           fi
           curl --fail-with-body --silent --show-error --max-time 320 \
             -H "Authorization: Bearer $CRON_SECRET" \
-            "$APP_URL/api/cron/agent-scan?session=intraday"
+            "$APP_URL/api/cron/agent-scan?session=intraday" || echo "intraday scan failed"
+          # Paper trading: executes last night's plan at the first run after 09:30 (once), enters the
+          # live agent's calls once a day, and settles open trades on every run.
+          curl --fail-with-body --silent --show-error --max-time 320 \
+            -H "Authorization: Bearer $CRON_SECRET" \
+            "$APP_URL/api/cron/paper-trade"

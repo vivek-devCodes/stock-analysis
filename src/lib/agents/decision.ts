@@ -1,4 +1,5 @@
 import "server-only";
+import { SHORT_PAGE } from "../exchange/catalog";
 import { buildForecast } from "../forecast";
 import type { DataSnapshot } from "./data";
 import { CALIBRATION_META } from "./specialists";
@@ -22,8 +23,8 @@ import type {
 
 /** Initial research weights from the spec; NOT proven optimal — calibrate on out-of-sample results. */
 export const WEIGHTS: Record<Horizon, Record<AgentId, number>> = {
-  swing: { fundamental: 20, technical: 25, market: 15, news: 15, ownership: 10, quant: 15, fno: 0 },
-  intraday: { fundamental: 5, technical: 40, market: 25, news: 15, ownership: 0, quant: 15, fno: 0 },
+  swing: { fundamental: 20, technical: 25, market: 15, news: 10, ownership: 10, quant: 10, fno: 10 },
+  intraday: { fundamental: 5, technical: 35, market: 20, news: 10, ownership: 10, quant: 10, fno: 10 },
   "long-term": { fundamental: 45, technical: 10, market: 10, news: 10, ownership: 10, quant: 15, fno: 0 },
 };
 
@@ -203,7 +204,15 @@ export function riskAgent(d: DataSnapshot, direction: Bias, capitalIn: number | 
   checks.push({ name: "Liquidity", status: advCr >= T.risk.liquidityPassCr ? "pass" : advCr >= T.risk.liquidityWarnCr ? "warn" : "fail", detail: `Average daily traded value ≈ ₹${advCr.toFixed(0)} crore.` });
   if (d.ind?.realizedVol != null && d.ind.realizedVol > T.risk.highVolatilityPct) checks.push({ name: "Volatility risk", status: "warn", detail: `Realised volatility ${d.ind.realizedVol.toFixed(0)}% annualised.` });
   if (d.vix != null && d.vix >= T.market.vixHigh) checks.push({ name: "Event / market risk", status: "warn", detail: `India VIX ${d.vix.toFixed(1)} — elevated market volatility.` });
-  checks.push({ name: "Event calendar", status: "warn", detail: "Results/board-meeting calendar not connected — check for scheduled events before acting." });
+  // NSE exchange data: surveillance, trading restrictions, circuits, F&O ban, events. A risk signal
+  // that blocks this horizon fails the check (veto); other risk signals are warnings.
+  const ex = d.exchangeData;
+  for (const sig of ex?.signals.filter((x) => x.effect === "risk") ?? []) {
+    checks.push({ name: `Exchange: ${sig.label}`, status: sig.blocks?.includes(d.horizon) ? "fail" : "warn", detail: `${sig.value} — ${sig.detail} (${SHORT_PAGE[sig.source]})` });
+  }
+  if (!ex?.events) checks.push({ name: "Event calendar", status: "warn", detail: "Results / dividend dates unavailable — check for scheduled events before acting." });
+  else if (!ex.signals.some((x) => x.id === "results" && x.effect === "risk")) checks.push({ name: "Event calendar", status: "pass", detail: `No results inside the trade window${ex.events.earningsDate ? ` (next: ${ex.events.earningsDate})` : ""}.` });
+  if (!ex?.stock) checks.push({ name: "Exchange checks", status: "warn", detail: ex?.note ?? "NSE surveillance / price-band data unavailable — restrictions could not be checked." });
   if (d.horizon === "intraday" && !marketOpen) checks.push({ name: "Session", status: "warn", detail: "Market is closed: this is a next-session watchlist with a conditional trigger, not an executable order." });
   if (d.horizon !== "intraday") checks.push({ name: "Gap risk", status: "warn", detail: "Overnight gaps can jump past the stop; actual loss can exceed the estimate." });
 
@@ -268,7 +277,7 @@ export function validate(params: {
   checks.push({ name: "News does not contradict", status: newsOpp ? "warn" : "pass", detail: newsOpp ? "Recent headlines lean the other way." : news.summary });
   const marketOpp = market.bias && dir && market.bias !== "neutral" && dir !== "neutral" && market.bias !== dir;
   checks.push({ name: "Market regime supports direction", status: marketOpp ? "warn" : "pass", detail: market.summary });
-  checks.push({ name: "F&O liquidity / payoff", status: "n/a", detail: "Equity analysis; derivatives disabled (no option-chain feed)." });
+  checks.push({ name: "F&O liquidity / payoff", status: "n/a", detail: "Equity trade; NSE F&O data (build-up, PCR, OI levels) is used as evidence only — no options strategy is proposed." });
   checks.push({
     name: "Profitable after costs",
     status: ev.probabilityType === "unknown" ? "warn" : (ev.expectancyPct ?? 0) > 0 ? "pass" : "fail",

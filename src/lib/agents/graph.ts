@@ -81,7 +81,7 @@ function specialist(id: AgentId) {
       void _side;
       return { agents: [r], cal };
     }
-    const r = id === "technical" ? technicalAgent(d) : id === "fundamental" ? fundamentalAgent(d) : id === "ownership" ? ownershipAgent(d) : fnoAgent();
+    const r = id === "technical" ? technicalAgent(d) : id === "fundamental" ? fundamentalAgent(d) : id === "ownership" ? ownershipAgent(d) : fnoAgent(d);
     return { agents: [r] };
   };
 }

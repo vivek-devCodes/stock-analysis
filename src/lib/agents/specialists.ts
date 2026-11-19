@@ -1,5 +1,8 @@
 import "server-only";
 import calibration from "../calibration.json";
+import { DATASET, SHORT_PAGE } from "../exchange/catalog";
+import { interpretMarket, netDirection } from "../exchange/interpret";
+import type { ExchangeSignal } from "../exchange/types";
 import { computeIndicators } from "../indicators";
 import type { Candle } from "../types";
 import type { DataSnapshot } from "./data";
@@ -64,10 +67,17 @@ export function marketAgent(d: DataSnapshot): AgentResult & { regimeLabel: strin
   ].filter(Boolean) as string[];
   const riskMode = riskOffSignals.length >= 2 ? "risk-off" : riskOffSignals.length === 0 ? "risk-on" : "mixed";
 
+  const ex = interpretMarket(d.exchangeMarket);
+  const exAdj = (id: string, w: number) => {
+    const sig = ex.find((x) => x.id === id);
+    return sig?.effect === "bullish" ? w : sig?.effect === "bearish" ? -w : 0;
+  };
+
   let score = regime === "bullish" ? 70 : regime === "bearish" ? 30 : 50;
   if (vixState === "high") score -= 10;
   if (riskMode === "risk-off") score -= 5;
   if (rel != null) score += rel > 2 ? 5 : rel < -2 ? -5 : 0;
+  score += exAdj("breadth", 5) + exAdj("fii", 3) + exAdj("nifty-pcr", 2);
   score = clamp(Math.round(score));
   const trendStrength = ind.adx == null ? "" : ind.adx >= 25 ? "trending" : ind.adx < 20 ? "range-bound" : "moderate trend";
   const regimeLabel = `${regime === "bullish" ? "Bullish" : regime === "bearish" ? "Bearish" : regime === "sideways" ? "Sideways" : "Unclear"}${trendStrength ? ` (${trendStrength})` : ""} · ${vixState ?? "unknown"} volatility · ${riskMode}`;
@@ -88,17 +98,27 @@ export function marketAgent(d: DataSnapshot): AgentResult & { regimeLabel: strin
       ...(inr ? [{ label: "USD/INR 20D", value: pct(inr.change20dPct), tone: inr.change20dPct != null && inr.change20dPct > T.market.rupeeWeakPct ? "warn" : undefined } as Finding] : []),
       ...(crude ? [{ label: "Brent 20D", value: pct(crude.change20dPct) } as Finding] : []),
       ...(usFut ? [{ label: "US futures 20D", value: pct(usFut.change20dPct), tone: tone(usFut.change20dPct) } as Finding] : []),
+      ...ex.map((x) => signalFinding(x)),
     ],
     evidence: [
       `NIFTY ${price > (ind.sma200 ?? Infinity) ? "above" : "below"} its 200-day average (${num(ind.sma200, 0)}).`,
       ...(riskOffSignals.length ? [`Risk-off signals: ${riskOffSignals.join(", ")}.`] : ["No major risk-off signals in VIX, rupee, crude or US equities."]),
+      ...ex.map((x) => `${x.label}: ${x.value} — ${x.detail} (${SHORT_PAGE[x.source]}, ${d.exchangeMarket?.tradeDate})`),
     ],
     warnings: [
-      "Not yet connected: FII/DII flows, market breadth (advance/decline), GIFT NIFTY, RBI/economic calendar.",
+      ...(d.exchangeMarket ? [] : ["NSE breadth, FII positioning and NIFTY options data could not be loaded."]),
+      "Not yet connected: GIFT NIFTY and the RBI/economic calendar. Breadth and FII data are from the last session's NSE files.",
     ],
-    sources: [],
+    sources: d.exchangeMarket
+      ? [
+          { name: `${SHORT_PAGE.participants} — ${DATASET.participants.file(d.exchangeMarket.tradeDate)}`, url: DATASET.participants.url(d.exchangeMarket.tradeDate), kind: "exchange", timestamp: d.exchangeMarket.tradeDate, note: "end of day" },
+          { name: `${SHORT_PAGE.bhav} — breadth`, url: DATASET.bhav.url(d.exchangeMarket.tradeDate), kind: "exchange", timestamp: d.exchangeMarket.tradeDate, note: "end of day" },
+        ]
+      : [],
   };
 }
+
+const signalFinding = (x: ExchangeSignal): Finding => ({ label: x.label, value: x.value, tone: x.effect === "bullish" ? "up" : x.effect === "bearish" ? "down" : x.effect === "risk" ? "warn" : undefined });
 
 /* -------------------------------- Agent 4: Technical analysis -------------------------------- */
 
@@ -147,7 +167,7 @@ export function technicalAgent(d: DataSnapshot): AgentResult {
     evidence: [...p.reasons, ...(d.insight && d.horizon !== "intraday" ? d.insight.working.slice(0, 1) : [])],
     warnings: [
       ...(aligned || p.bias === "neutral" ? [] : ["Timeframes are not aligned (daily vs weekly vs setup)."]),
-      "Not yet computed: Supertrend, Ichimoku, OBV, MFI, CMF, delivery %, candlestick/chart patterns.",
+      "Not yet computed: Supertrend, Ichimoku, OBV, MFI, CMF, candlestick/chart patterns. (Delivery % is scored by the Ownership & Flows agent.)",
     ],
     sources: [],
   };
@@ -243,37 +263,124 @@ export function newsAgent(d: DataSnapshot): AgentResult & { items: NewsItemRef[]
 
 /* ------------------------------- Agent 7: Ownership & flows ------------------------------- */
 
+/**
+ * Who is buying: NSE delivery % vs its average (accumulation / distribution), volume spikes,
+ * bulk & block deals and the 52-week position. Data: NSE end-of-day files for the last session.
+ */
 export function ownershipAgent(d: DataSnapshot): AgentResult {
   const ins = d.fundamentals?.insiderHolding ?? null;
+  const view = d.exchangeData;
+  const s = view?.stock;
+  if (!view || !s || !view.tradeDate) {
+    return {
+      agent: "ownership",
+      status: "insufficient-data",
+      score: null,
+      bias: null,
+      summary: view?.note ?? "NSE delivery and deal data could not be loaded, so ownership flows are not scored.",
+      findings: ins != null ? [{ label: "Promoter / insider holding", value: `${ins.toFixed(1)}%` }] : [],
+      evidence: [],
+      warnings: ["Quarterly shareholding (FII/DII/MF holdings, pledges) is not connected."],
+      sources: [],
+    };
+  }
+  const day = view.tradeDate;
+  const ids = ["delivery", "volume", "deals", "52w"];
+  const sig = view.signals.filter((x) => ids.includes(x.id));
+  const { score: dir, used } = netDirection(view.signals, ids, { delivery: 2, deals: 1.5, volume: 1, "52w": 1 });
+  const score = clamp(Math.round(50 + dir * 25));
+  const bseShare = s.bse && s.bse.volume + s.volume > 0 ? (s.bse.volume / (s.bse.volume + s.volume)) * 100 : null;
+  const directional = sig.filter((x) => x.effect === "bullish" || x.effect === "bearish");
   return {
     agent: "ownership",
-    status: "insufficient-data",
-    score: null,
-    bias: null,
-    summary: "Institutional flow data is not connected, so ownership is not scored.",
-    findings: ins != null ? [{ label: "Promoter / insider holding", value: `${ins.toFixed(1)}%` }] : [],
-    evidence: [],
-    warnings: ["Missing: FII/FPI, DII and mutual-fund holdings, promoter pledges, bulk/block deals, insider disclosures and quarter-on-quarter changes (needs exchange shareholding/deal filings)."],
-    sources: [],
+    status: "ok",
+    score,
+    bias: used ? biasOf(score) : "neutral",
+    summary: directional.length
+      ? `${directional.map((x) => x.label).join("; ")} in the ${day} session.`
+      : `No unusual delivery, volume or deal activity in the ${day} session (delivery ${s.deliveryPct != null ? `${s.deliveryPct.toFixed(0)}%` : "—"}).`,
+    findings: [
+      { label: "Delivery %", value: s.deliveryPct != null ? `${s.deliveryPct.toFixed(1)}%` : "—" },
+      { label: "Delivery avg", value: s.deliveryAvg != null ? `${s.deliveryAvg.toFixed(1)}% (${s.historyDays}d)` : "no history yet" },
+      { label: "Volume vs avg", value: s.volRatio != null ? `${s.volRatio.toFixed(1)}×` : "—", tone: s.volRatio != null && s.volRatio >= 2 ? "warn" : undefined },
+      { label: "Bulk / block deals", value: String(s.deals.length) },
+      { label: "52-week high / low", value: `${num(s.wk52High)} / ${num(s.wk52Low)}` },
+      ...(bseShare != null ? [{ label: "BSE share of volume", value: `${bseShare.toFixed(0)}%` }] : []),
+      ...(ins != null ? [{ label: "Promoter / insider holding", value: `${ins.toFixed(1)}%` }] : []),
+      ...sig.map(signalFinding),
+    ],
+    evidence: sig.map((x) => `${x.label}: ${x.value} — ${x.detail}`),
+    warnings: [
+      "Quarterly shareholding (FII/DII/MF holdings, promoter pledges) is not connected — NSE serves it only through its website API.",
+      ...(s.historyDays === 0 ? ["No stored history yet, so delivery and volume are not compared with their averages."] : []),
+    ],
+    sources: [
+      { name: `${SHORT_PAGE.bhav} — ${DATASET.bhav.file(day)}`, url: DATASET.bhav.url(day), kind: "exchange", timestamp: day, note: "end of day" },
+      ...(s.deals.length ? [{ name: SHORT_PAGE.bulk, url: DATASET.bulk.url(day), kind: "exchange" as const, timestamp: day, note: "end of day" }] : []),
+      { name: SHORT_PAGE.wk52, url: DATASET.wk52.url(day), kind: "exchange", timestamp: day, note: "corporate-action adjusted" },
+    ],
   };
 }
 
 /* ------------------------------- Agent 5: Futures & options ------------------------------- */
 
-export function fnoAgent(): AgentResult {
+/**
+ * Derivatives positioning from NSE's F&O bhavcopy (previous session): futures build-up, put–call
+ * ratio, OI support/resistance, max pain and ATM implied volatility. Used as evidence for the
+ * equity view only — no options strategy is recommended.
+ */
+export function fnoAgent(d: DataSnapshot): AgentResult {
+  const view = d.exchangeData;
+  const s = view?.stock;
+  const o = s?.fno;
+  if (!view || !s || !o || !view.tradeDate) {
+    return {
+      agent: "fno",
+      status: "insufficient-data",
+      score: null,
+      bias: null,
+      summary: !view || !s
+        ? "NSE F&O data could not be loaded."
+        : s.inFno
+          ? `${s.symbol} is an F&O stock, but NSE's F&O bhavcopy for ${view.tradeDate} is not published yet (it usually arrives in the evening).`
+          : `${s.symbol} is not in NSE's F&O segment, so there is no option chain or futures open interest.`,
+      findings: [],
+      evidence: [],
+      warnings: [],
+      sources: [],
+    };
+  }
+  const day = view.tradeDate;
+  const ids = ["buildup", "pcr", "oi-res", "oi-sup"];
+  const sig = view.signals.filter((x) => ids.includes(x.id) || x.id === "iv");
+  const { score: dir, used } = netDirection(view.signals, ids, { buildup: 2, pcr: 1, "oi-res": 1, "oi-sup": 1 });
+  const score = clamp(Math.round(50 + dir * 25));
+  const lakh = (x: number | null) => (x == null ? "—" : `${(x / 1e5).toFixed(1)} L`);
   return {
     agent: "fno",
-    status: "insufficient-data",
-    score: null,
-    bias: null,
-    summary: "No option-chain or futures data feed is connected, so no derivatives strategy can be evaluated.",
-    findings: [],
-    evidence: [],
-    warnings: [
-      "Missing: futures price/basis, open interest and its change, PCR, max pain, implied volatility, Greeks, lot sizes and bid-ask spreads.",
-      "Per the operating rules, no options strategy is recommended without its complete payoff and maximum risk, so F&O decisions are disabled.",
+    status: "ok",
+    score,
+    bias: used ? biasOf(score) : "neutral",
+    summary: `${o.buildup ? `${o.buildup[0].toUpperCase()}${o.buildup.slice(1)} in futures` : "No clear futures build-up"}; PCR ${o.pcr?.toFixed(2) ?? "—"}; options range ${num(o.support)}–${num(o.resistance)} (expiry ${o.expiry}).`,
+    findings: [
+      { label: "Futures build-up", value: o.buildup ?? "none", tone: o.buildup === "long build-up" || o.buildup === "short covering" ? "up" : o.buildup ? "down" : undefined },
+      { label: "Futures / OI change", value: `${pct(o.futChangePct)} / ${pct(o.futOiChangePct)}` },
+      { label: "Basis", value: pct(o.basisPct, 2) },
+      { label: "PCR (OI)", value: o.pcr?.toFixed(2) ?? "—" },
+      { label: "Call / put OI", value: `${lakh(o.callOi)} / ${lakh(o.putOi)}` },
+      { label: "Support / resistance (OI)", value: `${num(o.support)} / ${num(o.resistance)}` },
+      { label: "Max pain", value: num(o.maxPain) },
+      { label: "ATM IV", value: o.atmIv != null ? `${(o.atmIv * 100).toFixed(1)}%` : "—" },
+      { label: "ATM call Δ / Θ", value: o.atmCall ? `${o.atmCall.delta.toFixed(2)} / ${o.atmCall.theta.toFixed(2)}` : "—" },
+      { label: "Lot size", value: num(o.lotSize, 0) },
+      { label: "Expiry", value: `${o.expiry} (${o.daysToExpiry}d)` },
     ],
-    sources: [],
+    evidence: sig.map((x) => `${x.label}: ${x.value} — ${x.detail}`),
+    warnings: [
+      "End-of-day F&O data from the previous session; intraday OI changes are not seen.",
+      "Derivatives data is evidence for the equity view; no options strategy is recommended.",
+    ],
+    sources: [{ name: `${SHORT_PAGE.fo} — ${DATASET.fo.file(day)}`, url: DATASET.fo.url(day), kind: "exchange", timestamp: day, note: "end of day; Greeks by Black–Scholes at 6.5%" }],
   };
 }
 

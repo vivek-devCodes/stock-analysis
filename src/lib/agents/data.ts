@@ -1,5 +1,8 @@
 import "server-only";
 import { buildInsight } from "../analysis";
+import { DATASET, SHORT_PAGE } from "../exchange/catalog";
+import { getMarketDay, getStockView } from "../exchange/store";
+import type { MarketDay, StockExchangeView } from "../exchange/types";
 import { getFundamentalsFor, type Fundamentals } from "../fundamentals";
 import { computeIndicators } from "../indicators";
 import { getLiveQuotes } from "../live";
@@ -41,6 +44,10 @@ export type DataSnapshot = {
   sectorIndex: { symbol: string; candles: Candle[] } | null;
   vix: number | null;
   macro: MacroSeries[];
+  /** NSE/BSE exchange data for this stock (delivery, F&O, deals, surveillance, events). */
+  exchangeData: StockExchangeView | null;
+  /** Market-wide exchange data (breadth, FII positioning, NIFTY options). */
+  exchangeMarket: MarketDay | null;
   errors: string[];
   sources: SourceRef[];
 };
@@ -104,7 +111,7 @@ export async function collectData(rawSymbol: string, horizon: Horizon): Promise<
   const sector = SECTOR_OF.get(symbol) ?? "Other";
   const sectorSym = SECTOR_INDEX[sector];
 
-  const [dailyRes, weeklyRes, liveRes, scanRes, fundamentals, news, niftyRes, sectorRes, vixRes, macroRes] = await Promise.all([
+  const [dailyRes, weeklyRes, liveRes, scanRes, fundamentals, news, niftyRes, sectorRes, vixRes, macroRes, exchangeData, exchangeMarket] = await Promise.all([
     settle("Daily candles", errors, fetchChart(symbol, "2y", "1d")),
     settle("Weekly candles", errors, fetchChart(symbol, "5y", "1wk")),
     settle("Live quote", errors, getLiveQuotes([symbol]).then((q) => q[0] ?? null)),
@@ -119,6 +126,8 @@ export async function collectData(rawSymbol: string, horizon: Horizon): Promise<
     sectorSym ? settle("Sector index", errors, fetchChart(sectorSym, "6mo", "1d")) : Promise.resolve(null),
     settle("India VIX", errors, fetchChart("^INDIAVIX", "1mo", "1d")),
     Promise.all(MACRO.map((m) => settle(m.label, errors, fetchChart(m.symbol, "3mo", "1d")))),
+    settle("NSE exchange data", errors, getStockView(symbol)),
+    settle("NSE market data", errors, getMarketDay()),
   ]);
 
   const daily = dailyRes?.candles ?? [];
@@ -143,6 +152,14 @@ export async function collectData(rawSymbol: string, horizon: Horizon): Promise<
   if (fundamentals) sources.push({ name: "Yahoo Finance — fundamentals (quoteSummary)", kind: "vendor", note: "TTM ratios; growth = latest quarter YoY" });
   if (news) sources.push({ name: `News crawler — ${news.sources.filter((s) => s.ok).length} feeds`, kind: "media", timestamp: news.fetchedAt, note: "RSS; robots.txt-compliant" });
   if (niftyRes) sources.push({ name: "Yahoo Finance — NIFTY 50, India VIX, sector & macro series", kind: "vendor", timestamp: niftyRes.candles.length ? iso(niftyRes.candles.at(-1)!.time) : undefined });
+
+  if (exchangeData?.tradeDate) {
+    for (const src of exchangeData.sources) {
+      if (!src.ok) continue;
+      sources.push({ name: `${SHORT_PAGE[src.id]} — ${src.file}`, url: src.url, kind: "exchange", timestamp: `${exchangeData.tradeDate}T15:30:00+05:30`, note: `end of day · ${DATASET[src.id].page}` });
+    }
+    if (exchangeData.events) sources.push({ name: SHORT_PAGE.events, kind: "vendor", note: "results / ex-dividend dates" });
+  }
 
   const macro: MacroSeries[] = [];
   MACRO.forEach((m, i) => {
@@ -173,6 +190,8 @@ export async function collectData(rawSymbol: string, horizon: Horizon): Promise<
     sectorIndex: sectorSym && sectorRes ? { symbol: sectorSym, candles: sectorRes.candles } : null,
     vix: vixRes?.quote.price ?? null,
     macro,
+    exchangeData,
+    exchangeMarket,
     errors,
     sources,
   };

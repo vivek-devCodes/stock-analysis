@@ -23,6 +23,7 @@ import { computeStats, type GroupStats } from "@/lib/paper/stats";
 import type { PaperRunResult, PaperSnapshot, PaperTradeView } from "@/lib/paper/types";
 import { ValidationBadge } from "../agent/ReportView";
 import { Card, PageHeader } from "../shell/PageHeader";
+import { PlanAndReports } from "./PlanAndReports";
 
 const AUTO_KEY = "apex-paper-auto";
 const AUTO_RETRY_MS = 30 * 60_000;
@@ -281,6 +282,8 @@ export function PaperTrading() {
           <AlertTriangle className="h-4 w-4 shrink-0" /> {error}
         </p>
       )}
+      {snap && <PlanAndReports plan={snap.plan} reports={snap.reports} phase={snap.phase} onChanged={() => void load()} />}
+
       {snap?.note && (
         <p className="flex items-start gap-2 rounded-xl border border-warn/30 bg-warn/5 p-3 text-xs text-foreground/85">
           <Database className="mt-0.5 h-4 w-4 shrink-0 text-warn" /> {snap.note}
@@ -290,6 +293,12 @@ export function PaperTrading() {
       {lastRun && (
         <Card icon={PlayCircle} title={`Last agent run · ${time(lastRun.at)} IST`} tone="text-[#fb923c]">
           <div className="space-y-1.5 text-xs">
+            {lastRun.plan && (
+              <p>
+                <span className="font-semibold">Last night&apos;s plan first:</span>{" "}
+                {lastRun.plan.rows.map((r) => `${short(r.symbol)} ${r.entered ? "entered" : `skipped (${r.reason})`}`).join(" · ") || "no ideas"}
+              </p>
+            )}
             {lastRun.skipped && <p className="text-muted">{lastRun.skipped}</p>}
             {lastRun.shortlisted.length > 0 && (
               <p>

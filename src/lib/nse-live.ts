@@ -72,7 +72,7 @@ async function getSessionId(force = false): Promise<string> {
 }
 
 /** Call one tool; returns the JSON the tool put in its text content. Throws on tool errors. */
-async function callTool(name: string, args: Record<string, unknown>): Promise<unknown> {
+export async function callTool(name: string, args: Record<string, unknown>): Promise<unknown> {
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const sid = await getSessionId(attempt > 0);
     const res = await post({ jsonrpc: "2.0", id: ++rpcId, method: "tools/call", params: { name, arguments: args } }, sid);

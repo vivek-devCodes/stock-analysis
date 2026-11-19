@@ -110,3 +110,25 @@ export function pnl(side: PaperSide, entry: number, exit: number, qty: number, c
   const value = entry * qty;
   return { gross, costs, net, returnPct: value > 0 ? (net / value) * 100 : 0 };
 }
+
+/**
+ * Should a planned trade be entered at this price at the open? It is skipped when the open gapped
+ * through the stop (setup invalid) or the target (move missed), or when price already covered
+ * `maxChase` of the way to the target (chasing ruins the reward : risk).
+ */
+export function planEntry(side: PaperSide, ref: number, stop: number, target: number, price: number, maxChase: number): { ok: true } | { ok: false; reason: string } {
+  const long = side === "long";
+  if (!(price > 0)) return { ok: false, reason: "No live price" };
+  if (long ? price <= stop : price >= stop) return { ok: false, reason: `Opened ${long ? "at/below" : "at/above"} the stop (${stop.toFixed(2)}) — setup invalidated by the gap` };
+  if (long ? price >= target : price <= target) return { ok: false, reason: `Already ${long ? "above" : "below"} the target (${target.toFixed(2)}) — move missed` };
+  const progress = (price - ref) / (target - ref);
+  if (progress >= maxChase) return { ok: false, reason: `Already moved ${(progress * 100).toFixed(0)}% of the way to target — not chasing` };
+  return { ok: true };
+}
+
+/** Position size for a fixed risk budget, capped by capital. */
+export function sizeFor(entry: number, stop: number, capital: number, riskPct: number): number {
+  const dist = Math.abs(entry - stop);
+  if (!(dist > 0) || !(entry > 0)) return 0;
+  return Math.max(0, Math.min(Math.floor((capital * riskPct) / 100 / dist), Math.floor(capital / entry)));
+}
