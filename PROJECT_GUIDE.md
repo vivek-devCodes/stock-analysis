@@ -36,7 +36,7 @@ A guide to how this codebase is organised and how data moves through it. For qui
 | Email | `nodemailer` (SMTP; Gmail App Password recommended) |
 | Scheduling | `node-cron` |
 | Script runner | `tsx`, with `dotenv` for the `.env` file |
-| Market data | Yahoo Finance public endpoints (no key needed); NSE unofficial JSON API (scraper exists but isn't used yet) |
+| Market data | Yahoo Finance public endpoints (no key needed); NSE live market server (free, no key); NSE / BSE official end-of-day report files (see §12) |
 
 > ⚠️ Per [AGENTS.md](AGENTS.md), this Next.js version has breaking changes from older versions. Check `node_modules/next/dist/docs/` before changing framework-level code. [next.config.ts](next.config.ts) turns on `cacheComponents` and `partialPrefetching`.
 
@@ -247,3 +247,65 @@ Tests whether the AI agent's **intraday** calls are actually right, with no real
 **Scoring** — [src/lib/paper/stats.ts](src/lib/paper/stats.ts): win rate, target/stop/square-off counts, net P&L, total profit and loss, profit factor and expectancy, split by verdict and side. Each specialist agent (technical, market, news…) is also scored on whether its bullish or bearish view matched the actual price move.
 
 **Storage:** the `paper_trades` and `paper_runs` tables when `DATABASE_URL` is set. Otherwise trades are kept in server memory, which is lost on restart; the page warns about this.
+
+---
+
+## 12. NSE / BSE exchange data (`/market-data`) and the next-session intraday plan
+
+### Where the data comes from
+Every exchange dataset is an **official public file** published by NSE or BSE (the same files behind
+*Market Data → Daily Reports* on nseindia.com and the BSE bhavcopy page). They are downloaded
+directly with an honest user agent — no cookies, no scraping of web pages, no API key, no paid
+service. The catalogue, with the NSE page each file corresponds to, is in
+[src/lib/exchange/catalog.ts](src/lib/exchange/catalog.ts).
+
+| NSE / BSE page | File | Used for |
+|---|---|---|
+| Equity › Daily Reports (security-wise delivery) | `sec_bhavdata_full_DDMMYYYY.csv` | delivery %, volume, breadth, gainers/losers, most active |
+| Derivatives › Option Chain / Change in OI / Most Active (end of day) | `BhavCopy_NSE_FO_…csv.zip` | futures build-up, PCR, max pain, OI support/resistance, ATM IV + Greeks (Black–Scholes), OI spurts |
+| Equity › Price Bands & Surveillance Actions | `sec_list.csv` | price band, GSM stage, circuit hits |
+| Derivatives › Securities in ban period | `fo_secban.csv` | F&O ban |
+| Equity › Large Deals | `bulk.csv`, `block.csv` | bulk / block deals (two-way HFT churn is ignored) |
+| Equity › Indices | `ind_close_all_DDMMYYYY.csv` | index close, P/E, P/B |
+| Equity › 52 Week High/Low | `CM_52_wk_High_low_DDMMYYYY.csv` | 52-week levels (corporate-action adjusted) |
+| Securities Available For Trading / F&O lot sizes | `EQUITY_L.csv`, `fo_mktlots.csv` | universe, F&O membership, lot size |
+| NSE Clearing › Volatility | `FOVOLT_DDMMYYYY.csv` | annualised volatility |
+| Derivatives › Participant-wise OI | `fao_participant_oi_DDMMYYYY.csv` | FII / DII / Pro / Client index-futures positioning |
+| BSE › Equity Bhavcopy | `BhavCopy_BSE_CM_…CSV` | BSE volume / close |
+| NSE live market server (`mcp.nseindia.in`, free, no key) | — | live quotes, live movers |
+
+**Not used:** NSE's *live* option chain, pre-open screen, holiday list and corporate-action pages are
+served only through its cookie-protected website API, so they are deliberately not accessed.
+Instead: option analytics come from the end-of-day F&O bhavcopy, the opening gap is measured at
+09:15 from the live feed, holidays are detected from whether NSE published a bhavcopy, and
+results / ex-dividend dates come from Yahoo Finance.
+
+### Code
+- `src/lib/exchange/parse.ts`, `fno.ts`, `greeks.ts`, `build.ts`, `interpret.ts` — **pure**, tested by `npm run test:exchange`.
+- `src/lib/exchange/fetch.ts` — downloads (+ a tiny ZIP reader), latest published trading day.
+- `src/lib/exchange/store.ts` — Postgres tables `exchange_days` / `exchange_stocks` (40 sessions kept;
+  full records for the last 10), a 10-session history for delivery/volume averages (back-filled on
+  the first run), in-memory cache. A day built before all files were published is rebuilt later.
+- `interpret.ts` turns a stock's data into labelled signals (bullish / bearish / risk / info, each
+  with its source). The **same** signals drive the agents and the analyzer panel. Thresholds live
+  in `THRESHOLDS.exchange` ([thresholds.ts](src/lib/agents/thresholds.ts)).
+
+### How the agents use it
+- **Futures & Options agent** — build-up, PCR, OI walls, IV (evidence only; no options strategy).
+- **Ownership & Flows agent** — delivery vs average (accumulation / distribution), volume spike, deals, 52-week position.
+- **Market agent** — breadth (advances ÷ declines), FII index-futures long %, NIFTY PCR.
+- **Risk agent vetoes** — GSM (all horizons); trade-to-trade series, ≤ 5% price band, a circuit hit, or results due today/next session (intraday). F&O ban, high volatility, low-delivery moves, rich IV and ex-dividend are warnings.
+
+### The agent's day (intraday focus)
+| When (IST, Mon–Fri) | What | Where |
+|---|---|---|
+| 09:30–15:00, every 30 min | intraday scan; paper-trade run (executes **last night's plan first**, then the live agent's calls once a day); settles open trades | GitHub Actions → `/api/cron/agent-scan`, `/api/cron/paper-trade`; Vercel cron 09:35 |
+| 15:15 | every paper trade squared off (replayed from 5-min candles) | `paper/rules.ts` |
+| 19:15 | **nightly**: daily report (emailed) → download today's NSE/BSE files → build tomorrow's plan (screen → drop restricted stocks → re-rank with exchange data → full multi-agent analysis on the best 6) | Vercel cron → `/api/cron/nightly` |
+| 21:00 | backup of the nightly job (NSE sometimes publishes the F&O file late); every step is idempotent | GitHub Actions `agent-nightly.yml` |
+
+At the open a planned trade is **skipped** if the price gapped through the stop or the target, or
+already covered ≥ 50% of the way to the target (no chasing). Plans older than 4 days expire.
+The Paper Trading page shows the pending plan (with the exchange evidence behind each idea), how it
+was executed, and the daily reports ("was the agent right?").
+

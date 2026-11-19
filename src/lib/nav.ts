@@ -1,6 +1,7 @@
 import {
   BookOpen,
   Bot,
+  Building2,
   CandlestickChart,
   Clock,
   Filter,
@@ -45,6 +46,7 @@ export const NAV_GROUPS: Array<{ title: string; items: NavItem[] }> = [
     title: "Research",
     items: [
       { href: "/agent", label: "AI Analyst", icon: Bot, description: "Multi-agent analysis: evidence, risk check and independent validation", tone: "text-[#a78bfa]" },
+      { href: "/market-data", label: "NSE Market Data", icon: Building2, description: "Official NSE/BSE files: breadth, FII positioning, option chain, OI, delivery, deals, surveillance", tone: "text-[#60a5fa]" },
       { href: "/sectors", label: "Sectors", icon: PieChart, description: "Sector strength, buying/selling pressure and stock returns", tone: "text-[#34d399]" },
       { href: "/screener", label: "Stock Screener", icon: Filter, description: "Fundamentals: quality, growth and value", tone: "text-[#4fd1c5]" },
       { href: "/news", label: "Market News", icon: Newspaper, description: "Headlines from Indian financial media", tone: "text-[#f472b6]" },

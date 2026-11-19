@@ -62,6 +62,33 @@ export const THRESHOLDS = {
     buyingRatio: 1.2, // up-day volume ≥ 1.2 × down-day volume over 20 sessions = buying pressure
     sellingRatio: 0.83, // ≤ 0.83 (≈ 1 ÷ 1.2) = selling pressure
   },
+  exchange: {
+    // NSE/BSE exchange data (delivery, OI, deals, surveillance). See src/lib/exchange/interpret.ts.
+    deliveryHighRatio: 1.3, // delivery % ≥ 1.3 × its recent average = unusual delivery (conviction)
+    deliveryLowRatio: 0.7, // ≤ 0.7 × average with a big move = speculative / intraday-driven move
+    deliveryHighAbs: 60, // without history, ≥ 60% delivery counts as high
+    volumeSpike: 2, // volume ≥ 2 × recent average = volume spike
+    pcrBullish: 1.2, // put–call OI ratio ≥ 1.2: put writers defending (supportive)
+    pcrBearish: 0.7, // ≤ 0.7: call writers capping (pressure)
+    pcrStretched: 1.8, // ≥ 1.8: crowded — supportive but stretched
+    oiLevelPct: 1.5, // within 1.5% of the biggest call/put OI strike = at the options wall
+    near52wkPct: 2, // within 2% of the 52-week high/low
+    highAnnualVol: 0.6, // NSE Clearing annualised volatility ≥ 60% = high risk
+    ivRichRatio: 1.4, // ATM implied vol ≥ 1.4 × realised = options pricing a big move (event)
+    earningsSwingDays: 14, // results within 14 days = event risk for a swing trade
+    tightBandPct: 5, // price band ≤ 5% blocks intraday (stock can freeze at its circuit)
+    breadthStrong: 1.5, // advances ÷ declines ≥ 1.5 = broad rally
+    breadthWeak: 0.67, // ≤ 0.67 = broad sell-off
+    fiiLongBullish: 0.6, // FII index-futures long share ≥ 60% = positioned long
+    fiiLongBearish: 0.3, // ≤ 30% = positioned short
+  },
+  plan: {
+    // Next-session intraday plan (built after the close) and its execution at the open.
+    candidates: 12, // stocks screened into the shortlist before exchange-data re-ranking
+    analysed: 6, // stocks that get the full multi-agent analysis each night
+    maxChasePct: 0.5, // skip at the open if price already covered ≥ 50% of the way to target
+    expireDays: 4, // a plan not executed within 4 calendar days is expired
+  },
 } as const;
 
 /** Plain-English rule list for the UI and the digest email. */
@@ -96,11 +123,21 @@ export function describeRules(): Array<{ group: string; rules: string[] }> {
       ],
     },
     {
+      group: "Exchange data (NSE / BSE files)",
+      rules: [
+        "Vetoes: GSM surveillance (all horizons); trade-to-trade series BE/BZ, a price band of " + t.exchange.tightBandPct + "% or tighter, a circuit hit the previous session, or results due today/next session (intraday).",
+        `Accumulation = delivery % ≥ ${t.exchange.deliveryHighRatio}× its ${10}-session average on an up day; distribution = the same on a down day.`,
+        `Futures build-up from the F&O bhavcopy: price × OI change. PCR ≥ ${t.exchange.pcrBullish} supportive, ≤ ${t.exchange.pcrBearish} pressure; within ${t.exchange.oiLevelPct}% of the biggest call/put OI strike = at the options wall.`,
+        `Market: advances ÷ declines ≥ ${t.exchange.breadthStrong} broad rally, ≤ ${t.exchange.breadthWeak} broad sell-off; FII index futures ≥ ${t.exchange.fiiLongBullish * 100}% long bullish, ≤ ${t.exchange.fiiLongBearish * 100}% bearish.`,
+        "All exchange data is end of day (the previous session's official files); live prices come from NSE's live server.",
+      ],
+    },
+    {
       group: "Horizon logic",
       rules: [
         "Intraday & swing: the technical setup proposes the direction (VWAP, opening range, EMAs for intraday; trend filter + pullback/bounce for swing).",
         `Long term: fundamentals propose the direction (score ≥ ${t.fundamentals.bullish}); a bearish long-term trend vetoes it; a long-term hold needs fundamentals ≥ ${t.fundamentals.longTermMin}.`,
-        `Score weights — swing: fundamental 20, technical 25, market 15, news 15, ownership 10, quant 15; intraday: technical 40, market 25; long term: fundamental 45. Initial research weights, not proven optimal.`,
+        `Score weights — swing: fundamental 20, technical 25, market 15, news 10, ownership 10, quant 10, F&O 10; intraday: technical 35, market 20, ownership 10, F&O 10; long term: fundamental 45. Initial research weights, not proven optimal.`,
       ],
     },
   ];

@@ -1,0 +1,35 @@
+# After-the-close backup for the nightly job (Vercel Cron runs it at 19:15 IST). NSE sometimes
+# publishes its end-of-day files late, so this run at ~21:00 IST retries each step; every step is
+# idempotent (a finished report / plan is not rebuilt). Uses the same two repository secrets as
+# the intraday workflow: APEX_APP_URL and APEX_CRON_SECRET.
+name: Agent nightly (report, NSE data, next-session plan)
+
+on:
+  schedule:
+    # 15:30 UTC = 21:00 IST, Monday–Friday
+    - cron: "30 15 * * 1-5"
+  workflow_dispatch: {}
+
+permissions: {}
+
+jobs:
+  nightly:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Report, exchange data, plan
+        env:
+          APP_URL: ${{ secrets.APEX_APP_URL }}
+          CRON_SECRET: ${{ secrets.APEX_CRON_SECRET }}
+        run: |
+          if [ -z "$APP_URL" ] || [ -z "$CRON_SECRET" ]; then
+            echo "APEX_APP_URL / APEX_CRON_SECRET not set — skipping."
+            exit 0
+          fi
+          for step in report exchange plan; do
+            echo "== $step"
+            curl --fail-with-body --silent --show-error --max-time 320 \
+              -H "Authorization: Bearer $CRON_SECRET" \
+              "$APP_URL/api/cron/nightly?step=$step" || echo "step $step failed"
+            echo
+          done

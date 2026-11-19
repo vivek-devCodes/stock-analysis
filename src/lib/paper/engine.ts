@@ -4,6 +4,8 @@ import { mapLimit, shortlist } from "../agents/scan";
 import type { AnalysisReport } from "../agents/types";
 import { getLiveQuotes } from "../live";
 import { fetchChart } from "../yahoo";
+import { executePendingPlan } from "./plan";
+import { latestPlan, listDailyReports } from "./plan-store";
 import { istDate, marketPhase, PAPER_SETTINGS, PHASE_LABEL, pnl, replayTrade } from "./rules";
 import { autoRanOn, claimAutoRun, insertTrade, isPersisted, listTrades, openTrades, releaseAutoRun, saveAutoRun, symbolsTradedOn, updateTrade } from "./store";
 import type { MarketPhase, PaperKind, PaperRunResult, PaperSnapshot, PaperTrade, PaperTradeView } from "./types";
@@ -92,6 +94,11 @@ export async function runPaperAgent(trigger: "auto" | "manual"): Promise<PaperRu
     result.skipped = PHASE_LABEL[phase];
     return result;
   }
+  // First task of the session: last night's plan (runs once per plan, whoever gets here first).
+  result.plan = await executePendingPlan().catch((e) => {
+    result.errors.push(`Plan execution: ${e instanceof Error ? e.message : String(e)}`);
+    return null;
+  });
   if (trigger === "auto" && !(await claimAutoRun(day))) {
     result.skipped = "The automatic run already happened today.";
     return result;
@@ -177,7 +184,7 @@ export async function settleOpenTrades(force = false): Promise<{ checked: number
 /** Everything the Paper Trading page needs: trades with live marks, plus market status. */
 export async function paperSnapshot(): Promise<PaperSnapshot> {
   await settleOpenTrades().catch((e) => console.error("[paper] settle failed:", e));
-  const [trades, persisted, phase] = await Promise.all([listTrades(), isPersisted(), livePhase()]);
+  const [trades, persisted, phase, plan, reports] = await Promise.all([listTrades(), isPersisted(), livePhase(), latestPlan().catch(() => null), listDailyReports(10).catch(() => [])]);
   const today = istDate(nowS());
   const openSymbols = [...new Set(trades.filter((t) => t.status === "open").map((t) => t.symbol))];
   const quotes = openSymbols.length ? await getLiveQuotes(openSymbols).catch(() => []) : [];
@@ -196,6 +203,8 @@ export async function paperSnapshot(): Promise<PaperSnapshot> {
     today,
     autoRanToday: await autoRanOn(today),
     trades: views,
+    plan,
+    reports,
     settings: PAPER_SETTINGS,
   };
 }

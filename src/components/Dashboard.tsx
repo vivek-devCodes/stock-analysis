@@ -13,6 +13,7 @@ import { TrackBadge } from "./TrackBadge";
 import { ChartControls, SignalLegend } from "./ChartControls";
 import { DEFAULT_SIGNALS, DEFAULT_STUDIES, type SignalId, type StudyId } from "@/lib/chart-config";
 import { StockInsightPanel } from "./insights/StockInsightPanel";
+import { ExchangeDataPanel } from "./exchange/ExchangeDataPanel";
 
 const LIVE_POLL_MS = 10_000;
 import { ALERT_KEY, EVENT_KEY, loadJson, loadWatchlist, saveJson, saveWatchlist } from "@/lib/watchlist";
@@ -498,6 +499,9 @@ export function Dashboard({ initialSymbol }: { initialSymbol: string }) {
                 <SignalLegend signals={signals} />
               </section>
       )}
+
+      {/* Row 2b: NSE / BSE exchange data the agents use, full width under the chart */}
+      {data && quote && <ExchangeDataPanel key={quote.symbol} symbol={quote.symbol} />}
 
       {/* Row 3: analysis and news · risk, range and alerts */}
       <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
