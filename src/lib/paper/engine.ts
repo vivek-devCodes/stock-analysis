@@ -16,6 +16,8 @@ import type { MarketPhase, PaperKind, PaperRunResult, PaperSnapshot, PaperTrade,
 import { applyTuning, DEFAULT_TUNING, gateTrade, type Tuning } from "../learn/improve";
 import { currentImprovement, marketAgrees } from "../learn/improve-run";
 import { THRESHOLDS } from "../agents/thresholds";
+import { compassAgainst } from "../compass/core";
+import { currentCompass } from "../compass/fetch";
 
 /**
  * Intraday paper trading driven by the AI Analyst.
@@ -125,7 +127,8 @@ export async function runPaperAgent(trigger: "auto" | "manual"): Promise<PaperRu
     if (!symbols.length) result.skipped = "The intraday scanner found no directional setups right now.";
 
     // Risk rules: regime, daily loss limit, drawdown pause, position and sector limits.
-    const [guard, learned] = await Promise.all([currentGuard(), currentImprovement()]);
+    const [guard, learned, compassNow] = await Promise.all([currentGuard(), currentImprovement(), currentCompass().catch(() => null)]);
+    const compass = compassNow?.compass ?? null;
     const tuning = learned?.tuning ?? DEFAULT_TUNING;
     result.risk = guard.reasons.length ? guard.reasons : guard.regime ? [`Regime ${guard.regime.level}: ${guard.regime.notes.join("; ")}`] : [];
     const market = await getMarketDay().catch(() => null);
@@ -141,7 +144,8 @@ export async function runPaperAgent(trigger: "auto" | "manual"): Promise<PaperRu
       result.analysed += 1;
       const atrPct = atrPctOf(exch.get(r.instrument.symbol.replace(/\.(NS|BO)$/, "")));
       const gate = r.risk.plan ? gateTrade(learned, { origin: "live", side: r.risk.plan.direction, score: r.score.total }) : null;
-      const learnMult = gate && gate.allow ? gate.sizeMult : 1;
+      const against = r.risk.plan ? compassAgainst(compass, r.risk.plan.direction) : 0;
+      const learnMult = (gate && gate.allow ? gate.sizeMult : 1) * (against >= 0.5 ? 0.5 : 1);
       const t = toTrade(r, trigger, day, { mult: (guard.sizeMult > 0 ? guard.sizeMult : 1) * learnMult, atrPct }, tuning);
       if ("reason" in t) {
         result.notTraded.push({ symbol: r.instrument.symbol, reason: t.reason });

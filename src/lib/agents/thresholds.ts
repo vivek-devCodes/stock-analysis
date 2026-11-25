@@ -200,6 +200,23 @@ export function describeRules(): Array<{ group: string; rules: string[] }> {
       ],
     },
     {
+      group: "Market Compass (9 AM pre-market checklist)",
+      rules: [
+        "Opening bias from: GIFT Nifty premium over NIFTY's close (weight 35), NIFTY pre-open advance/decline 09:00–09:08 (25; previous session's breadth before that, 8), US close — Dow / Nasdaq (20), US futures (10), Nikkei / Hang Seng (10).",
+        "Score ≥ +50 gap-up, ≥ +20 positive, ≤ −20 negative, ≤ −50 gap-down; otherwise flat. India VIX ≥ 15 = volatile session, below 15 = calmer / range-bound.",
+        "Paper trades the compass argues against (strength ≥ 0.5) are entered at half size. Each day's reading is graded against NIFTY's actual open and close, so its accuracy is measured.",
+      ],
+    },
+    {
+      group: "Insider-trading strategy (NSE PIT disclosures)",
+      rules: [
+        "Nightly: last 7 days of SEBI PIT Regulation 7(2) disclosures from NSE; only open-market purchases / sales by promoters, promoter group, directors and KMP count (ESOP trusts, gifts, allotments, pledges and inter-se transfers are ignored).",
+        "Insider score (0–100): net ₹ bought (log scale, ₹1 lakh → ₹10 crore), number of different insiders buying, stake added, promoter vs director; any insider selling reduces it.",
+        "Daily chart check: Setup ready = bullish structure or near support with ≥ 1 ATR to resistance; Wait = right under resistance; Avoid = bearish structure or below a falling 200-day average.",
+        "Ready names get a full analysis in tomorrow's plan (up to 2 extra); insider buying lifts the Flows agent's score, insider selling lowers it. Every ready pick is scored 1 and 5 sessions later.",
+      ],
+    },
+    {
       group: "Self-improvement (learns from mistakes)",
       rules: [
         "Every closed paper trade gets a post-mortem: result in R after costs, and the cause of a loss (stopped early, against the market, stop too tight, gave back a winner, no follow-through).",

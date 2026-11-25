@@ -382,3 +382,42 @@ Both entry paths (the overnight plan at the open, and the live intraday scan) go
 **Agents:**
 - **Technical agent.** Adds structure, zones, trendlines, the Fibonacci level, POC, the candle pattern and pivots to its findings. Its score moves −20…+15 by level context, for example a long right under resistance is penalised.
 - **Risk agent.** Puts the stop just beyond the nearest support or resistance zone, if that stays within 0.6–1.6× the original distance. It pulls target 1 in before the next opposing zone, so reward-to-risk reflects the real room to move.
+
+---
+
+## 16. Insider-buying strategy (`/insider`)
+
+Idea: promoters, directors and key managers who **buy their own company's shares in the open market** are putting their own money behind it. The app reads those disclosures from NSE every night and checks each stock's daily chart before suggesting anything.
+
+| Step | Code | Detail |
+|---|---|---|
+| Fetch | [insider/run.ts](src/lib/insider/run.ts) | One request a night to NSE's insider-trading list (`/api/corporates-pit-gg`, last 8 days, Regulation 7(2)). Then each disclosure's XBRL file from NSE's public archive, downloaded once and cached in `insider_filings`. The client identifies itself as `ApexDesk/1.0`. |
+| Filter | [insider/core.ts](src/lib/insider/core.ts) | Only **open-market purchases and sales** (incl. block deals) by **promoters, promoter group, directors and KMP**. ESOP trusts, gifts, allotments, pledges and inter-se transfers are ignored. |
+| Insider score | `insiderScore` | 0–100 from net ₹ bought (log scale, ₹1 lakh → ₹10 crore), number of different insiders, stake added and promoter vs director. Any selling lowers it. |
+| Chart check | `chartVerdict` + [levels.ts](src/lib/levels.ts) | **Setup ready**: bullish structure or near support, with ≥ 1 ATR to resistance. **Wait**: right under resistance. **Avoid**: bearish structure or below a falling 200-day average. |
+| Use | plan, Flows agent, morning email | Up to 2 "ready" names get a full analysis in tomorrow's plan. Insider buying lifts the Flows (ownership) agent's score and insider selling lowers it. The morning email lists the week's insider buying. |
+| Proof | `scoreScreens`, `insider_screens` | Every day's screen is saved. Each "ready" pick is scored 1 and 5 sessions later, and the page shows the strategy's own track record. |
+
+Nightly step: `/api/cron/nightly?step=insider` (before `plan`). On demand: the page's **Fetch latest from NSE** button (`POST /api/insider`). Tests: `npm run test:insider` (includes a live NSE run into an in-memory database).
+
+Caveat: disclosures arrive up to 2 trading days after the trade, and research mostly finds the effect over days to weeks rather than within one session. That is why the track record is measured instead of assumed.
+
+---
+
+## 17. Market Compass: the 9 AM pre-market checklist
+
+[compass/core.ts](src/lib/compass/core.ts) (pure, tested by `npm run test:compass`) and [compass/fetch.ts](src/lib/compass/fetch.ts). It's shown on the home dashboard and in the morning email.
+
+| Check | Source | Weight | Reading |
+|---|---|---|---|
+| GIFT Nifty (formerly SGX Nifty) | NSE IX ticker `/api/market-rate?type=derivatives` (most-traded NIFTY future) | 35 | Premium over NIFTY's last close **minus the future's normal cost of carry** (≈ 5.2% a year to expiry). What's left is the implied gap. |
+| NIFTY advance / decline | NSE pre-open `/api/market-data-pre-open?key=NIFTY` (09:00–09:08), otherwise the previous session's breadth from the NSE files | 25 (8 for the fallback) | Up vs down stocks, plus NIFTY's indicative change |
+| US close | Yahoo: Dow Jones, Nasdaq (S&P shown) | 20 | Green close → better odds of a positive open |
+| US futures | Yahoo: Dow and Nasdaq futures | 10 | Overnight move |
+| Asia | Yahoo: Nikkei, Hang Seng | 10 | This morning's move |
+| India VIX | Yahoo `^INDIAVIX` | 0 (not directional) | ≥ 15 volatile (wider swings), < 15 calm / range-bound |
+
+- **Score bands:** ≥ +50 gap-up, ≥ +20 positive, ≤ −20 negative, ≤ −50 gap-down, otherwise flat. A short playbook follows from bias × volatility.
+- **Global markets panel:** NIFTY, Bank Nifty, Sensex, VIX, GIFT Nifty, Dow, Nasdaq, S&P, US futures, Nikkei, Hang Seng, FTSE, DAX, Brent, USD/INR and Gold on one screen.
+- **Use in trading:** paper trades the compass argues against (strength ≥ 0.5) enter at half size. The reading is recorded at the morning email and again at the open with pre-open data.
+- **Proof:** each day's reading is graded against NIFTY's actual open and close (`market_compass` table, `learn` step), and its hit rate is shown on the card.

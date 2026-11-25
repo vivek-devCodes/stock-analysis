@@ -10,6 +10,10 @@ import type { Recommendation } from "../types";
 import type { ImproveState } from "../learn/improve";
 import { describeExit } from "../learn/improve";
 import { getLearned } from "../learn/store";
+import { latestScreen } from "../insider/run";
+import { VERDICT_TEXT } from "../insider/core";
+import { currentCompass, recordCompass } from "../compass/fetch";
+import type { Compass } from "../compass/core";
 
 /**
  * The 08:30 IST morning report: market snapshot, today's trade plan, the agents' fresh calls and
@@ -43,6 +47,8 @@ export type MorningData = {
   watchlistSource: string;
   yesterday: string | null;
   learned: { changes: string[]; lessons: string[]; defensive: boolean; rules: string[]; setups: string[] } | null;
+  insider: Array<{ symbol: string; net: number; buyers: number; promoter: boolean; verdict: string; reasons: string }>;
+  compass: Compass | null;
   issues: string[];
 };
 
@@ -91,13 +97,16 @@ export async function collectMorningData(run: ScanRun | null): Promise<MorningDa
   const calls = (run?.horizons ?? []).flatMap((h) => h.items).filter((i) => i.validation === "APPROVED" || i.validation === "APPROVED WITH CONDITIONS");
   const callMap = new Map((run?.horizons ?? []).flatMap((h) => h.items).map((i) => [i.symbol, i] as const));
 
-  const [indexQuotes, plan, reports, wl, improve] = await Promise.all([
+  const [indexQuotes, plan, reports, wl, improve, insiderScreen, compassNow] = await Promise.all([
     fetchIndexQuotes(INDICES.map(([s]) => s)).catch(() => []),
     latestPlan().catch(() => null),
     listDailyReports(1).catch(() => []),
     getServerWatchlist(),
     getLearned<ImproveState>("improve").catch(() => null),
+    latestScreen().catch(() => null),
+    currentCompass(true).catch(() => null),
   ]);
+  if (compassNow) await recordCompass(compassNow.compass).catch(() => undefined);
   const imp = improve?.data ?? null;
   const watchlist = await mapLimit(wl.symbols, 4, (s) => watchRow(s, callMap));
   for (const w of watchlist) if (w.error) issues.push(`${w.symbol}: ${w.error}`);
@@ -121,6 +130,11 @@ export async function collectMorningData(run: ScanRun | null): Promise<MorningDa
     watchlist,
     watchlistSource: wl.source,
     yesterday: reports[0] ? `${reports[0].day}: ${reports[0].headline}` : null,
+    compass: compassNow?.compass ?? null,
+    insider: (insiderScreen?.buying ?? [])
+      .filter((p) => p.chart.verdict !== "avoid")
+      .slice(0, 8)
+      .map((p) => ({ symbol: p.symbol, net: p.netValue, buyers: p.buyers, promoter: p.promoterBuy, verdict: VERDICT_TEXT[p.chart.verdict], reasons: p.chart.reasons.slice(0, 2).join(" · ") })),
     learned: imp
       ? {
           changes: imp.changes,
@@ -220,6 +234,13 @@ export function renderMorningReport(d: MorningData): { subject: string; html: st
 
     ${d.indices.length ? `<table role="presentation" cellspacing="0" cellpadding="0" style="width:100%;margin-top:10px"><tr>${tiles}</tr></table>` : ""}
 
+    ${d.compass ? section(`Market Compass: ${esc(d.compass.biasText)}${d.compass.score != null ? ` (${d.compass.score > 0 ? "+" : ""}${d.compass.score})` : ""}`, `${d.compass.expectedGapPct != null ? `GIFT Nifty points to ${d.compass.expectedGapPct >= 0 ? "+" : ""}${d.compass.expectedGapPct.toFixed(2)}% at the open. ` : ""}${esc(d.compass.volatilityText)}.`,
+      table(th("Check") + th("Reading") + th("Says"), d.compass.checks.map((c) => `<tr>
+        ${td(esc(c.label))}
+        ${td(esc(c.reading), "left", "font-size:12px")}
+        ${td(`<b style="color:${c.tone === "bullish" ? C.up : c.tone === "bearish" ? C.down : C.muted}">${c.tone === "bullish" ? "Positive" : c.tone === "bearish" ? "Negative" : c.tone === "neutral" ? "Neutral" : "—"}</b>`)}
+      </tr>`).join("")) + (d.compass.playbook.length ? `<div style="padding:10px 16px 14px;font-size:13px">${d.compass.playbook.map((p) => `<div>• ${esc(p)}</div>`).join("")}</div>` : "")) : ""}
+
     ${section("Today's trade plan", d.plan ? `Built from NSE end-of-day data after ${esc(d.plan.madeOn)}. ${esc(d.plan.note)}` : "",
       planRows ? table(th("Stock") + th("Side") + th("Entry zone") + th("Stop", "right") + th("Target", "right") + th("R:R", "right") + th("Why"), planRows) : emptyNote("No intraday plan for today: nothing passed the plan's evidence and risk rules (or the nightly NSE data was not available)."))}
 
@@ -228,6 +249,17 @@ export function renderMorningReport(d: MorningData): { subject: string; html: st
 
     ${section(`Your watchlist (${d.watchlist.length})`, "Last close, the rule-based signal, trend and the nearest support / resistance.",
       watchRows ? table(th("Stock") + th("Last", "right") + th("Day", "right") + th("Signal") + th("RSI", "right") + th("Trend") + th("Levels", "right") + th("Note"), watchRows) : emptyNote("Your watchlist is empty. Add stocks on the Stock Analyzer page."))}
+
+    ${section("Insider buying this week", "Promoters / directors buying in the open market (NSE disclosures), checked on the daily chart.",
+      d.insider.length
+        ? table(th("Stock") + th("Net bought", "right") + th("Insiders", "right") + th("Chart") + th("Why"), d.insider.map((x) => `<tr>
+          ${td(`<b>${esc(x.symbol)}</b>${x.promoter ? `<div style="font-size:11px;color:${C.accent}">Promoter buying</div>` : ""}`)}
+          ${td(x.net >= 1e7 ? `₹${(x.net / 1e7).toFixed(2)} cr` : `₹${(x.net / 1e5).toFixed(1)} L`, "right", `color:${C.up};font-weight:600`)}
+          ${td(String(x.buyers), "right")}
+          ${td(`<b style="color:${x.verdict === "Setup ready" ? C.up : C.warn}">${esc(x.verdict)}</b>`)}
+          ${td(esc(x.reasons), "left", "font-size:12px")}
+        </tr>`).join(""))
+        : emptyNote("No promoter or director open-market buying in the last 7 days, or the screen has not run yet."))}
 
     ${d.yesterday ? section("Yesterday's paper trading", "", `<div style="padding:0 16px 14px;font-size:13px">${esc(d.yesterday)}</div>`) : ""}
 

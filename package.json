@@ -19,6 +19,8 @@
     "test:exchange": "tsx --tsconfig tsconfig.scripts.json src/scripts/test-exchange.ts",
     "test:improve": "tsx --tsconfig tsconfig.scripts.json src/scripts/test-improve.ts",
     "test:levels": "tsx --tsconfig tsconfig.scripts.json src/scripts/test-levels.ts",
+    "test:insider": "tsx --tsconfig tsconfig.scripts.json src/scripts/test-insider.ts",
+    "test:compass": "tsx --tsconfig tsconfig.scripts.json src/scripts/test-compass.ts",
     "test:learn": "tsx --tsconfig tsconfig.scripts.json src/scripts/test-learn.ts"
   },
   "dependencies": {

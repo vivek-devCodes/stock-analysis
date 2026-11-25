@@ -3,6 +3,7 @@ import { ArrowRight, LayoutDashboard, Zap } from "lucide-react";
 import { HeadlinesWidget, MarketKpis, TopStocksWidget, WatchlistWidget } from "@/components/overview/OverviewWidgets";
 import { Card, PageHeader } from "@/components/shell/PageHeader";
 import { NAV_GROUPS } from "@/lib/nav";
+import { MarketCompassCard } from "@/components/compass/MarketCompass";
 
 const DESKS = NAV_GROUPS.flatMap((g) => (g.title === "Overview" ? [] : g.items));
 
@@ -12,6 +13,8 @@ export default function OverviewPage() {
       <PageHeader icon={LayoutDashboard} title="Market overview" subtitle="Your stock-analysis workspace — live markets, picks and news at a glance." />
 
       <MarketKpis />
+
+      <MarketCompassCard />
 
       <Card icon={Zap} tone="text-warn" title="Quick access">
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
