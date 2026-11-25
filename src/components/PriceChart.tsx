@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   CandlestickSeries,
   ColorType,
@@ -20,6 +20,8 @@ import {
 import type { AnalyzeResponse, LiveQuote } from "@/lib/types";
 import { bollinger, donchian, ema, ichimoku, keltner, parabolicSar, sessionVwap, sma, supertrend, supertrendSignals, type ChartSignal, type Point } from "@/lib/chart-studies";
 import { SIGNAL_COLORS, type SignalId, type StudyId } from "@/lib/chart-config";
+import { candlePatterns, dailyLevels, fairValueGaps, fibRetracement, marketStructure, srZones, trendlines, volumeProfile, vwapBands } from "@/lib/levels";
+import { DrawingToolbar, loadDrawings, saveDrawings, type Drawing, type DrawTool } from "./DrawingToolbar";
 
 const INTERVAL_SECONDS: Record<string, number> = { "5m": 300, "15m": 900, "1h": 3600, "1d": 86400, "1wk": 604800 };
 type Bar = { time: UTCTimestamp; open: number; high: number; low: number; close: number };
@@ -32,6 +34,15 @@ type Props = {
   signals: SignalId[];
   /** Latest live tick for this symbol; moves the last candle (or opens a new one). */
   live?: LiveQuote | null;
+};
+
+const PATTERN_SHORT: Record<string, string> = {
+  "Bullish engulfing": "Engulf",
+  "Bearish engulfing": "Engulf",
+  Hammer: "Hammer",
+  "Shooting star": "Star",
+  "Morning star": "M-Star",
+  "Evening star": "E-Star",
 };
 
 function toTime(unix: number): UTCTimestamp {
@@ -72,6 +83,27 @@ export function PriceChart({ data, studies, signals, live }: Props) {
   const lastBar = useRef<Bar | null>(null);
   // Remember the zoom per symbol+range so background refreshes don't reset it.
   const view = useRef<{ key: string; range: LogicalRange | null } | null>(null);
+  // Drawing tools: the active tool (ref, so clicks see it without rebuilding), the first click of a
+  // two-point drawing, and the saved drawings for this symbol (localStorage).
+  const [tool, setTool] = useState<DrawTool>("none");
+  const toolRef = useRef<DrawTool>("none");
+  const pending = useRef<{ time: number; price: number } | null>(null);
+  const [drawings, setDrawings] = useState<{ symbol: string; items: Drawing[] }>(() => ({ symbol: data.quote.symbol, items: loadDrawings(data.quote.symbol) }));
+  // New symbol → load its drawings once (state adjusted during render, so `items` stays stable and
+  // live ticks don't rebuild the chart).
+  if (drawings.symbol !== data.quote.symbol) setDrawings({ symbol: data.quote.symbol, items: loadDrawings(data.quote.symbol) });
+  const items = drawings.items;
+  const [hint, setHint] = useState<string | null>(null);
+  const chooseTool = (t: DrawTool) => {
+    toolRef.current = t;
+    pending.current = null;
+    setTool(t);
+    setHint(t === "none" ? null : t === "hline" ? "Click a price on the chart" : "Click the first point");
+  };
+  const updateDrawings = (next: Drawing[]) => {
+    saveDrawings(data.quote.symbol, next);
+    setDrawings({ symbol: data.quote.symbol, items: next });
+  };
 
   useEffect(() => {
     if (!priceRef.current || !rsiRef.current || !macdRef.current) return;
@@ -203,12 +235,111 @@ export function PriceChart({ data, studies, signals, live }: Props) {
       addLine("rgba(91,140,255,0.7)", band("low"), { dashed: true, extendFuture: true });
     }
 
+    /* ---- Pro tools (src/lib/levels.ts): the same levels the agents use ---- */
+    const priceLine = (price: number, color: string, title: string, style: LineStyle = LineStyle.Dashed, width: 1 | 2 = 1) =>
+      candles.createPriceLine({ price, color, lineWidth: width, lineStyle: style, axisLabelVisible: title !== "", title });
+    const visible = data.candles;
+    if (has("zones")) {
+      for (const z of srZones(c)) {
+        const col = z.role === "support" ? "rgba(61,214,140,0.85)" : "rgba(255,92,122,0.85)";
+        priceLine(z.high, col, `${z.role === "support" ? "S" : "R"} ${z.touches}×`, LineStyle.Solid, 2);
+        priceLine(z.low, col, "", LineStyle.Dotted);
+      }
+    }
+    if (has("trendlines")) {
+      for (const t of trendlines(c)) {
+        const start = c.findIndex((x) => x.time === t.from.time);
+        if (start < 0) continue;
+        const pts = c.slice(start).map((x, k) => ({ time: x.time, value: t.from.value + t.slopePerBar * k }));
+        addLine(t.kind === "support" ? "#3dd68c" : "#ff5c7a", pts, { width: 2, dashed: t.broken });
+      }
+    }
+    if (has("fib")) {
+      const fib = fibRetracement(visible.length >= 30 ? visible : c);
+      for (const l of fib?.levels ?? []) priceLine(l.price, l.ratio === 0.618 || l.ratio === 0.5 ? "#facc15" : "rgba(250,204,21,0.55)", `Fib ${l.label}`, l.ratio > 1 ? LineStyle.Dotted : LineStyle.Dashed);
+    }
+    if (has("pivots")) {
+      const dl = dailyLevels(intraday ? visible : c);
+      if (dl) {
+        priceLine(dl.pivots.p, "#e2e8f0", "P", LineStyle.Solid);
+        priceLine(dl.pivots.r1, "#fb7185", "R1");
+        priceLine(dl.pivots.r2, "#fb7185", "R2", LineStyle.Dotted);
+        priceLine(dl.pivots.s1, "#4ade80", "S1");
+        priceLine(dl.pivots.s2, "#4ade80", "S2", LineStyle.Dotted);
+        priceLine(dl.pdh, "#38bdf8", "PDH", LineStyle.Solid);
+        priceLine(dl.pdl, "#38bdf8", "PDL", LineStyle.Solid);
+        priceLine(dl.pdc, "#94a3b8", "PDC", LineStyle.Dotted);
+      }
+    }
+    if (has("vwap-bands") && intraday) {
+      const vb = vwapBands(c);
+      addLine("#facc15", vb.vwap, { width: 2 });
+      addLine("rgba(250,204,21,0.55)", vb.up1, { dashed: true });
+      addLine("rgba(250,204,21,0.55)", vb.dn1, { dashed: true });
+      addLine("rgba(250,204,21,0.3)", vb.up2, { dashed: true });
+      addLine("rgba(250,204,21,0.3)", vb.dn2, { dashed: true });
+    }
+    if (has("vprofile")) {
+      const vp = volumeProfile(visible);
+      if (vp) {
+        priceLine(vp.poc, "#c084fc", "POC", LineStyle.Solid, 2);
+        priceLine(vp.vah, "rgba(192,132,252,0.6)", "VAH");
+        priceLine(vp.val, "rgba(192,132,252,0.6)", "VAL");
+      }
+    }
+    if (has("fvg")) {
+      for (const g of fairValueGaps(c, 4)) {
+        const col = g.kind === "bullish" ? "rgba(45,212,191,0.7)" : "rgba(251,146,60,0.7)";
+        priceLine(g.top, col, `FVG ${g.kind === "bullish" ? "↑" : "↓"}`, LineStyle.Dotted);
+        priceLine(g.bottom, col, "", LineStyle.Dotted);
+      }
+    }
+
+    /* ---- the trader's own drawings ---- */
+    for (const dr of items) {
+      if (dr.kind === "hline") priceLine(dr.a.price, "#f8fafc", "Line", LineStyle.Solid);
+      else if (dr.kind === "trend" && dr.b) {
+        const [p1, p2] = dr.a.time <= dr.b.time ? [dr.a, dr.b] : [dr.b, dr.a];
+        const span = p2.time - p1.time || 1;
+        addLine("#f8fafc", times.filter((t) => t >= p1.time).map((t) => ({ time: t, value: p1.price + ((p2.price - p1.price) * (t - p1.time)) / span })), { width: 2 });
+      } else if (dr.kind === "fib" && dr.b) {
+        const hi = Math.max(dr.a.price, dr.b.price);
+        const lo = Math.min(dr.a.price, dr.b.price);
+        const upMove = dr.b.price >= dr.a.price;
+        for (const r of [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1]) priceLine(upMove ? hi - (hi - lo) * r : lo + (hi - lo) * r, "rgba(248,250,252,0.7)", `${(r * 100).toFixed(1)}%`, LineStyle.Dashed);
+      }
+    }
+    priceChart.subscribeClick((param) => {
+      const active = toolRef.current;
+      if (active === "none" || !param.point || param.time == null) return;
+      const price = candles.coordinateToPrice(param.point.y);
+      if (price == null) return;
+      const pt = { time: Number(param.time), price: Number(price) };
+      if (active === "hline") {
+        updateDrawings([...items, { id: `${Date.now()}`, kind: "hline", a: pt }]);
+        chooseTool("none");
+      } else if (!pending.current) {
+        pending.current = pt;
+        setHint("Click the second point");
+      } else {
+        updateDrawings([...items, { id: `${Date.now()}`, kind: active, a: pending.current, b: pt }]);
+        chooseTool("none");
+      }
+    });
+
     // BUY / SELL markers on the candles.
     const marks: ChartSignal[] = [];
     const daily = data.dailySignals ?? [];
     if (signals.includes("engine")) marks.push(...daily.filter((m) => m.source === "engine"));
     if (signals.includes("supertrend")) marks.push(...supertrendSignals(c));
     if (signals.includes("golden-cross")) marks.push(...daily.filter((m) => m.source === "golden-cross"));
+    if (signals.includes("structure")) marks.push(...marketStructure(c).events);
+    if (signals.includes("pattern"))
+      marks.push(
+        ...candlePatterns(c)
+          .filter((x) => x.side !== "neutral")
+          .map((x) => ({ time: x.time, side: x.side as "buy" | "sell", source: "pattern" as const, label: x.name, detail: x.name })),
+      );
     const inRange = new Set(times);
     const markers: SeriesMarker<Time>[] = marks
       .filter((m) => inRange.has(m.time))
@@ -219,8 +350,8 @@ export function PriceChart({ data, studies, signals, live }: Props) {
         shape: m.side === "buy" ? "arrowUp" : "arrowDown",
         color: SIGNAL_COLORS[m.source][m.side],
         // Every marker says what it is; the colour (see legend) says which rule fired it.
-        text: m.source === "golden-cross" ? (m.side === "buy" ? "GC" : "DC") : m.side === "buy" ? "BUY" : "SELL",
-        size: 1.6,
+        text: m.source === "golden-cross" ? (m.side === "buy" ? "GC" : "DC") : m.source === "structure" ? m.label : m.source === "pattern" ? PATTERN_SHORT[m.label] ?? m.label : m.side === "buy" ? "BUY" : "SELL",
+        size: m.source === "pattern" || m.source === "structure" ? 1 : 1.6,
       }));
     if (markers.length) createSeriesMarkers(candles, markers);
 
@@ -295,7 +426,8 @@ export function PriceChart({ data, studies, signals, live }: Props) {
       charts.current.forEach((c) => c.remove());
       charts.current = [];
     };
-  }, [data, studies, signals]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- items/updateDrawings change with the drawings themselves
+  }, [data, studies, signals, items]);
 
   // Live tick → update the forming candle, or start the next one when its interval has passed.
   useEffect(() => {
@@ -316,7 +448,8 @@ export function PriceChart({ data, studies, signals, live }: Props) {
 
   return (
     <div className="space-y-2">
-      <div ref={priceRef} className="w-full" />
+      <DrawingToolbar tool={tool} onTool={chooseTool} count={items.length} hint={hint} onClear={() => updateDrawings([])} onUndo={() => updateDrawings(items.slice(0, -1))} />
+      <div ref={priceRef} className={tool === "none" ? "w-full" : "w-full cursor-crosshair"} />
       <p className="px-1 text-[10px] uppercase tracking-wider text-muted">RSI (14)</p>
       <div ref={rsiRef} className="w-full" />
       <p className="px-1 text-[10px] uppercase tracking-wider text-muted">MACD (12, 26, 9)</p>

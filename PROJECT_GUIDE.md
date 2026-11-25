@@ -14,11 +14,14 @@ A guide to how this codebase is organised and how data moves through it. For qui
    - A rule-based **BUY / HOLD / SELL** verdict with reasons
    - A statistical price **forecast** with a confidence band
    - News headlines with keyword-based sentiment
-   - A watchlist and price/volume **alerts**, stored in the browser
-2. **Daily AI report pipeline** (backend job). Before the Indian market opens (8:45 AM IST, Mon–Fri), it:
-   - Analyses about 40 NSE stocks across 10 sectors using the same indicator and forecast engine
-   - Sends all of that data to **Google Gemini** (`gemini-2.5-flash`) for structured recommendations
-   - Emails an HTML report (intraday, short-term and long-term picks, stocks to avoid, sector view, news)
+   - A watchlist (saved in the database) and price/volume **alerts** (stored in the browser)
+2. **Morning report** (automatic email). Every weekday before the open (08:10–08:35 IST), it emails:
+   - Index snapshot (NIFTY 50, SENSEX, BANK NIFTY, INDIA VIX) and the market regime
+   - Today's intraday trade plan (built overnight from NSE end-of-day data)
+   - The AI Analyst's approved calls from the pre-market scan
+   - Every watchlist stock: last price, rule-based signal, RSI, trend, support / resistance
+
+Everything is computed by the app's own rules. **No external AI service (Gemini, ChatGPT, Claude…) and no AI API key is used.**
 
 > This is research tooling, not investment advice.
 
@@ -32,9 +35,8 @@ A guide to how this codebase is organised and how data moves through it. For qui
 | Styling | Tailwind CSS v4 (through `@tailwindcss/turbopack`), Geist fonts |
 | Charts | `lightweight-charts` v5 (TradingView) |
 | Icons | `lucide-react` |
-| LLM | `@google/genai` (Gemini 2.5 Flash, JSON-schema output) |
 | Email | `nodemailer` (SMTP; Gmail App Password recommended) |
-| Scheduling | `node-cron` |
+| Scheduling | Vercel Cron + GitHub Actions (see §7) |
 | Script runner | `tsx`, with `dotenv` for the `.env` file |
 | Market data | Yahoo Finance public endpoints (no key needed); NSE live market server (free, no key); NSE / BSE official end-of-day report files (see §12) |
 
@@ -56,9 +58,11 @@ stock-analysis/
 │   │       ├── quote/route.ts        GET  lightweight quote (used by alert polling)
 │   │       ├── search/route.ts       GET  symbol search / autocomplete
 │   │       ├── market/route.ts       GET  index ticker strip (Nifty, Sensex, S&P, BTC…)
-│   │       └── daily-report/route.ts GET status / SMTP test, POST run the AI pipeline
+│   │       ├── watchlist/route.ts    GET/PUT the saved watchlist (read by the morning report)
+│   │       ├── morning-report/route.ts GET preview / status, POST send now
+│   │       └── cron/morning-report/  the scheduled 08:30 IST email
 │   ├── components/
-│   │   ├── Dashboard.tsx         # The whole UI: search, watchlist, analysis panels, alerts, report modal
+│   │   ├── Dashboard.tsx         # The whole UI: search, watchlist, analysis panels, alerts
 │   │   └── PriceChart.tsx        # lightweight-charts: price + volume, RSI, MACD panes
 │   ├── lib/                      # Pure logic, shared by the API and the daily script
 │   │   ├── types.ts              # Shared types: Candle, Quote, Indicators, Insight, Forecast…
@@ -66,15 +70,15 @@ stock-analysis/
 │   │   ├── indicators.ts         # SMA, EMA, RSI, MACD, BB, ATR, Stochastic, vol, pivot S/R
 │   │   ├── forecast.ts           # Ensemble statistical forecast
 │   │   ├── analysis.ts           # Scoring engine → BUY/HOLD/SELL insight
-│   │   ├── llm-analyzer.ts       # Gemini prompt + JSON schema for the daily report
-│   │   ├── email-template.ts     # DailyReport types + HTML email builder
-│   │   ├── email-service.ts      # Nodemailer transport, send + verify
+│   │   ├── reports/morning.ts    # Morning report: data collection + email layout
+│   │   ├── reports/morning-run.ts # Once-a-day send, preview, history
+│   │   ├── watchlist-store.ts    # Server-side watchlist (DB → WATCHLIST_SYMBOLS → default)
+│   │   ├── email-service.ts      # Nodemailer transport, send + verify, readable SMTP errors
 │   │   ├── stock-universe.ts     # Sector → NSE symbol lists, Nifty 50 list
-│   │   ├── nse-scraper.ts        # NSE India cookie-based scraper (gainers/losers/sectors) — not used yet
-│   │   ├── watchlist.ts          # localStorage helpers (watchlist, alerts, events)
+│   │   ├── watchlist.ts          # localStorage helpers (browser copy of the watchlist, alerts, events)
 │   │   └── format.ts             # Price/number/percent formatting, clsx
 │   └── scripts/
-│       └── daily-analysis.ts     # Daily pipeline: run once, --cron, or --test-email
+│       └── test-email.ts         # npm run test-email: check the SMTP settings
 ├── generate_stock_analysis_doc.py  # python-docx script that produced Stock_Analysis_System_Documentation.docx
 ├── test_style.py                   # Small python-docx table-shading test
 ├── .env.example                    # Required environment variables
@@ -94,13 +98,11 @@ cp .env.example .env        # fill in the keys you need (see §8)
 npm run dev                 # dashboard at http://localhost:3000
 npm run build && npm start  # production build
 
-npm run daily-report        # run the AI pipeline once and send the email
-npm run daily-report:cron   # long-running scheduler (Mon–Fri 03:15 UTC = 08:45 IST)
 npm run test-email          # check the SMTP credentials only
 npm run lint
 ```
 
-The dashboard works **without any API keys**. Only the daily report needs `GEMINI_API_KEY` and the SMTP settings.
+The app needs **no API keys**. Only the emails need the SMTP settings.
 
 ---
 
@@ -169,21 +171,20 @@ A simple keyword count on each headline: +1 for each positive word (surge, beat,
 
 ---
 
-## 7. Data flow: the daily AI report
+## 7. The morning report (08:30 IST email)
 
-[src/scripts/daily-analysis.ts](src/scripts/daily-analysis.ts) → `runDailyAnalysis()`
+[reports/morning.ts](src/lib/reports/morning.ts) and [reports/morning-run.ts](src/lib/reports/morning-run.ts)
 
-1. **Market context**: Nifty, Sensex and Bank Nifty prices from Yahoo (`fetchIndexQuotes`).
-2. **Stock selection**: the first 4 symbols of each of the 10 sectors in [stock-universe.ts](src/lib/stock-universe.ts), about 40 stocks after removing duplicates.
-3. **Per-stock analysis**: the same pipeline as `/api/analyze`, run in batches of 8 with a 2-second pause between batches.
-4. **LLM step**: [llm-analyzer.ts](src/lib/llm-analyzer.ts) builds one large markdown prompt (market overview plus every stock's fundamentals, indicators, model verdict and news) and calls Gemini with a strict JSON `responseJsonSchema` at temperature 0.3. The response is normalised into `StockPick[]` and related types.
-5. **Report**: a `DailyReport` object is built and rendered by [email-template.ts](src/lib/email-template.ts) into an email-safe dark HTML layout, with a plain-text fallback.
-6. **Send**: [email-service.ts](src/lib/email-service.ts) sends to `REPORT_RECIPIENTS` over SMTP.
+1. **Pre-market scan**: runs the AI Analyst's pre-market session (rule-based agents, no external AI).
+2. **Data**: index quotes, today's intraday plan (built the night before from NSE files), the approved agent calls, and the saved watchlist. Each watchlist stock goes through the same indicator and scoring engine as `/analyze`.
+3. **Layout**: an email-safe light HTML layout (header, index tiles, plan table, agent calls, watchlist table, yesterday's paper-trading result) with a plain-text fallback.
+4. **Send once**: `morning_reports` holds one row per day. The first trigger claims it and later triggers skip. A failed send can be retried by the next trigger.
 
-There are three ways to start it:
-- CLI: `npm run daily-report` (runs once) or `npm run daily-report:cron` (keeps running on a schedule)
-- HTTP: `POST /api/daily-report` (the Dashboard's "AI Stock Recommendation Dispatcher" modal calls this)
-- SMTP check only: `GET /api/daily-report?action=test-email` or `npm run test-email`
+**Schedule (Mon–Fri):** GitHub Actions ([morning-report.yml](.github/workflows/morning-report.yml)) at 08:10 and 08:35 IST is the main trigger, because Vercel's free plan may run a cron any time within its hour. Vercel Cron (`0 3 * * 1-5` = 08:30 IST) is the backup. GitHub needs the repository secrets `APEX_APP_URL` and `APEX_CRON_SECRET` (the same value as Vercel's `CRON_SECRET`).
+
+**Watchlist:** the Stock Analyzer page saves every change to the `watchlist` table through `PUT /api/watchlist`. The first time it loads, it uploads the list already in the browser.
+
+**By hand:** open `/api/morning-report` to preview today's report in the browser (nothing is sent). `POST /api/morning-report` sends it now. `/api/morning-report?view=status` shows recent sends and checks the email settings.
 
 ---
 
@@ -191,10 +192,12 @@ There are three ways to start it:
 
 | Variable | Needed for | Notes |
 |---|---|---|
-| `GEMINI_API_KEY` | Daily report | Google AI Studio key |
-| `SMTP_HOST`, `SMTP_PORT` | Daily report | Defaults: `smtp.gmail.com`, `587` (465 switches on TLS) |
-| `SMTP_USER`, `SMTP_PASS` | Daily report | For Gmail, use an **App Password** |
-| `REPORT_RECIPIENTS` | Daily report | Comma-separated email addresses |
+| `SMTP_HOST`, `SMTP_PORT` | All emails | Defaults: `smtp.gmail.com`, `587` (465 switches on TLS) |
+| `SMTP_USER`, `SMTP_PASS` | All emails | For Gmail, use an **App Password** (not your normal password) |
+| `REPORT_RECIPIENTS` | All emails | Comma-separated email addresses |
+| `WATCHLIST_SYMBOLS` | Morning report | Optional fallback until a watchlist is saved |
+| `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | Phone alerts (optional) | Free Telegram bot: entries, exits, daily report, weekly scorecard, health alerts. See §13 |
+| `ADAPTIVE_WEIGHTS` | Learning loop (optional) | `off` keeps the research score weights and ignores learned signal multipliers |
 | `FINNHUB_API_KEY`, `NEWS_API_KEY`, `ALPHA_VANTAGE_API_KEY` | — | Listed in the template, but **no code reads them yet** |
 
 ---
@@ -207,8 +210,9 @@ There are three ways to start it:
 | `GET /api/quote` | `symbol` | `{ quote }` (5-day chart meta) |
 | `GET /api/search` | `q` | `{ results: SearchResult[] }` |
 | `GET /api/market` | — | `{ indices, asOf }` for ^NSEI, ^BSESN, ^NSEBANK, ^GSPC, ^IXIC, ^DJI, BTC-USD |
-| `GET /api/daily-report` | `action=test-email` (optional) | Status info or the SMTP check result |
-| `POST /api/daily-report` | — | Runs the full pipeline and returns `{ success, report }` |
+| `GET/PUT /api/watchlist` | `{ symbols }` on PUT | The saved watchlist |
+| `GET /api/morning-report` | `view=status` (optional) | Today's report as HTML, or send history + SMTP check |
+| `POST /api/morning-report` | — | Sends the morning report now |
 
 ---
 
@@ -216,11 +220,7 @@ There are three ways to start it:
 
 These came up while reading the code. They're useful context before you change anything.
 
-- **`nse-scraper.ts` is never imported.** The daily report's `topGainers`, `topLosers` and `sectorPerformance` are always empty arrays, so Gemini gets no breadth data. The index `change` field is also hard-coded to `0`, so the email's index cards show a ▲ 0.00 absolute change.
-- **`analyzeStockDeep()`** in `llm-analyzer.ts` is exported but nothing calls it.
 - **Alert type `news`** is defined in `AlertRule` but never evaluated. **`volatility_spike`** uses the same check as `pct_change`.
-- **`POST /api/daily-report` has no authentication.** Anyone who can reach the server can trigger a Gemini call and an email send.
-- **Cron runs in-process** (`node-cron`). The machine has to be awake and the process running at 03:15 UTC. Deploying to a serverless host would need an external scheduler that calls the POST route.
 - **Data source fragility**: Yahoo and NSE endpoints are unofficial, and NSE needs browser-like headers and cookies. Both can break or rate-limit without warning.
 - `stock-universe.ts`: the "Infra" sector includes `LTTS.NS` (an IT services firm), and `MARKET_INDICES` / `getStocksBySector` aren't used.
 - `generate_stock_analysis_doc.py` and `test_style.py` are standalone Python helpers for the `.docx` documentation. The app doesn't use them.
@@ -299,13 +299,86 @@ results / ex-dividend dates come from Yahoo Finance.
 ### The agent's day (intraday focus)
 | When (IST, Mon–Fri) | What | Where |
 |---|---|---|
-| 09:30–15:00, every 30 min | intraday scan; paper-trade run (executes **last night's plan first**, then the live agent's calls once a day); settles open trades | GitHub Actions → `/api/cron/agent-scan`, `/api/cron/paper-trade`; Vercel cron 09:35 |
+| 09:30–15:00, every 30 min | intraday scan; paper-trade run (works through **last night's plan first** — opening-range breakout entries until 11:00 — then the live agent's calls once a day); settles open trades | GitHub Actions → `/api/cron/agent-scan`, `/api/cron/paper-trade`; Vercel cron 09:35 |
 | 15:15 | every paper trade squared off (replayed from 5-min candles) | `paper/rules.ts` |
-| 19:15 | **nightly**: daily report (emailed) → download today's NSE/BSE files → build tomorrow's plan (screen → drop restricted stocks → re-rank with exchange data → full multi-agent analysis on the best 6) | Vercel cron → `/api/cron/nightly` |
-| 21:00 | backup of the nightly job (NSE sometimes publishes the F&O file late); every step is idempotent | GitHub Actions `agent-nightly.yml` |
+| 19:15 | **nightly**: download today's NSE/BSE files → daily report (emailed) → learning (scorecard, baselines, weights) → build tomorrow's plan (screen → drop restricted stocks → re-rank with exchange data and learned signal weights → full multi-agent analysis on the best 6) → portfolio → weekly scorecard (Fri) → health check | Vercel cron → `/api/cron/nightly` |
+| 21:00 | the same steps one by one (NSE sometimes publishes the F&O file late); every step is idempotent; health alerts are only sent from this run | GitHub Actions `agent-nightly.yml` |
 
-At the open a planned trade is **skipped** if the price gapped through the stop or the target, or
-already covered ≥ 50% of the way to the target (no chasing). Plans older than 4 days expire.
+At the open each planned trade waits for the first 15 minutes' range and enters only on a break in
+its direction (a stop-entry at the range edge). It is **skipped** if the stop is touched first, the
+price gapped through the target, or the entry already covered ≥ 50% of the way to the target (no
+chasing); still waiting at 11:00 → dropped. Plans older than 4 days expire.
 The Paper Trading page shows the pending plan (with the exchange evidence behind each idea), how it
 was executed, and the daily reports ("was the agent right?").
 
+---
+
+## 13. Accuracy loop: scorecard, risk rules, portfolio, alerts
+
+Code: [src/lib/learn/](src/lib/learn/), [paper/regime.ts](src/lib/paper/regime.ts), [paper/risk.ts](src/lib/paper/risk.ts), [paper/guard.ts](src/lib/paper/guard.ts), [src/lib/portfolio/](src/lib/portfolio/), [notify.ts](src/lib/notify.ts). Pages: `/scorecard`, `/portfolio`. Tests: `npm run test:learn`. Every number is in `THRESHOLDS` (`guard`, `regime`, `learn`, `plan`).
+
+### Measure (Scorecard page, nightly `learn` step)
+- **Signal scorecard** — every directional NSE signal (delivery, volume, 52-week, F&O build-up, PCR, OI walls, deals) is scored on every liquid stock (≥ ₹10 cr/day) against the **next session's open → close**. Past sessions are rebuilt from NSE's dated archive files (12 a night), so evidence exists from day one. Stored as small daily aggregates in `signal_days`.
+- **Edge, not raw hit rate** — a signal is judged by its hit rate minus what the market gave anyway (share of stocks that rose or fell). Without this a falling market makes every short signal look good.
+- **Score calibration** — closed paper trades grouped by the agent's score (< 50, 50–64, 65–74, 75+). If higher scores don't win more often, the score is flagged as miscalibrated.
+- **Baselines** — each executed plan is compared with *yesterday's top 5 gainers* and *5 random picks from the same screen*, all open → close after 0.1% costs (`baseline_days`). If the agent can't beat these, it isn't adding value yet.
+
+### Learn (bounded, reversible)
+- Signals with ≥ 100 observations and no edge are **muted** in plan ranking; ones with an edge get up to 1.5×.
+- After 60 closed paper trades, each agent with ≥ 30 calls has its score weight scaled 0.5–1.5× by its hit rate (`learned` table, used by `scoreAll`). `ADAPTIVE_WEIGHTS=off` turns both off.
+- The **self-review** (Scorecard page and weekly email) lists what to mute, what to trust, signals that work in reverse, and whether the agent beats the baselines. Nothing is changed beyond the bounded multipliers above — thresholds stay human decisions.
+
+### Trade less, and only in good conditions
+- **Regime** ([regime.ts](src/lib/paper/regime.ts)): India VIX from the NSE indices file + NIFTY vs its 20-day average. Calm → normal; VIX ≥ 18, a ≥ 10% VIX jump or a choppy NIFTY → half size, max 3 positions; VIX ≥ 25 → no new recommended trades. In a clear trend only the with-trend side is recommended.
+- **Risk rules** ([risk.ts](src/lib/paper/risk.ts)): 2% daily loss limit; max 5 open; max 2 per sector; ≤ 25% of capital per position; stocks with ATR > 3% get proportionally fewer shares; an 8% drawdown pauses recommended trades until **Resume** on the Scorecard page.
+- A trade blocked by a rule is still paper-traded as **shadow** with its `riskNote`, so each rule's value is measured.
+- **Exits**: stop moves to entry once a candle closes 1R in profit (status `breakeven`); square-off at 15:15.
+
+### Momentum + quality portfolio (`/portfolio`)
+₹10 lakh paper basket from the fundamentals universe: above the 200-day average, positive 6/12-month momentum (skipping the last month), quality ≥ 50, ROE ≥ 12%, debt/equity ≤ 1.5 (banks exempt). Ranked 50/50 momentum/quality, top 12 (fewer if fewer qualify), ≤ 3 per sector, equal weight, 0.3% round-trip costs. Rebalanced on the first session of each month (nightly `portfolio` step); valued nightly against NIFTY 50 (`portfolio_rebalances`, `portfolio_nav`).
+
+### Automation
+| What | When | Where |
+|---|---|---|
+| Weekly scorecard email | Fridays, nightly `weekly` step | [learn/weekly.ts](src/lib/learn/weekly.ts) |
+| Health check (NSE files, plan, paper trades, report, scans, email/Telegram config) | nightly; alerts once a day from the 21:00 run | [learn/health.ts](src/lib/learn/health.ts) |
+| Telegram alerts | plan/live entries, exits, daily report, weekly, health | [notify.ts](src/lib/notify.ts) |
+
+**Telegram setup (free):** in Telegram open **@BotFather** → `/newbot` → copy the token into `TELEGRAM_BOT_TOKEN`. Send your new bot any message, open `https://api.telegram.org/bot<token>/getUpdates`, copy `message.chat.id` into `TELEGRAM_CHAT_ID`. Add both in Vercel → Settings → Environment Variables and redeploy.
+
+
+---
+
+## 14. Self-improvement engine (learns from its own mistakes)
+
+[learn/improve.ts](src/lib/learn/improve.ts) (pure, tested by `npm run test:improve`) and [learn/improve-run.ts](src/lib/learn/improve-run.ts) (nightly job, part of the `learn` step).
+
+| Step | What it does | Guard rails |
+|---|---|---|
+| Post-mortem | Every closed paper trade: result in R after costs, best/worst excursion, and the cause of a loss (stopped within 30 min, against NIFTY's direction, stop too tight, gave back a winner, no follow-through) | Uses the trade's own 5-minute candles (Yahoo keeps ~60 days) |
+| Setup ledger | Trades grouped by plan/live × long/short × score band. Losing with confidence → **blocked** (still run as shadow trades); unproven → half size; proven profitable → full size | Judged after 15 trades; confidence = mean ± 1 standard error |
+| Exit tuning | Replays the trades with other stop widths, targets and break-even rules | Adopted only if ≥ 0.05R better on the older ⅔ **and** not worse on the newest ⅓ |
+| Entry rules | 30-minute opening range if early stop-outs dominate; NIFTY-direction filter if counter-trend trades lose; minimum score if low scores lose | Each rule needs a minimum sample and switches back when the evidence changes |
+| Defensive mode | If the last 20 recommended trades lose with confidence, only proven setups trade, at half size | Lifts automatically |
+
+Both entry paths (the overnight plan at the open, and the live intraday scan) go through the same gate. Each trade records what was changed (`learnNote`) and its break-even rule. The Scorecard page shows the rules in force, last night's changes, the lessons, the setup ledger and a trade journal. The morning email has a "What the engine learned" section. `ADAPTIVE_WEIGHTS=off` switches all of it off.
+
+---
+
+## 15. Chart pro tools and level-aware agents
+
+[levels.ts](src/lib/levels.ts) (tested by `npm run test:levels`) computes the levels a chart trader draws by hand. The chart and the agents share it:
+
+- **Auto S/R zones**: clustered swing highs and lows, with touch counts
+- **Auto trendlines**: rising support and falling resistance through swing points
+- **Auto Fibonacci**: retracement and extensions of the latest swing
+- **Pivots**: floor pivots plus previous-day high, low and close
+- **VWAP ± σ bands** and **volume profile** (POC and value area)
+- **Fair-value gaps**
+- **Markers**: market structure (BOS / CHoCH) and candlestick patterns (engulfing, hammer, shooting star, morning/evening star)
+
+**Drawing tools** on the analyzer chart: horizontal line, trendline and Fibonacci retracement, saved per stock in the browser. Undo and Clear are in the toolbar.
+
+**Agents:**
+- **Technical agent.** Adds structure, zones, trendlines, the Fibonacci level, POC, the candle pattern and pivots to its findings. Its score moves −20…+15 by level context, for example a long right under resistance is penalised.
+- **Risk agent.** Puts the stop just beyond the nearest support or resistance zone, if that stays within 0.6–1.6× the original distance. It pulls target 1 in before the next opposing zone, so reward-to-risk reflects the real room to move.

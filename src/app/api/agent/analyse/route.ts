@@ -3,7 +3,7 @@ import { requireRole } from "@/lib/auth/guard";
 import { runAnalysis } from "@/lib/agents/graph";
 import { HORIZONS, type AnalyseRequest } from "@/lib/agents/types";
 
-// Data collection fans out to ~20 requests; the optional Gemini review adds up to 25 s.
+// Data collection fans out to ~20 requests.
 export const maxDuration = 60;
 
 const SYMBOL_RE = /^[A-Za-z0-9^][A-Za-z0-9.\-=&^]{0,24}$/;

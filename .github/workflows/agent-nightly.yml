@@ -2,7 +2,7 @@
 # publishes its end-of-day files late, so this run at ~21:00 IST retries each step; every step is
 # idempotent (a finished report / plan is not rebuilt). Uses the same two repository secrets as
 # the intraday workflow: APEX_APP_URL and APEX_CRON_SECRET.
-name: Agent nightly (report, NSE data, next-session plan)
+name: Agent nightly (NSE data, scorecard, report, plan, portfolio, health)
 
 on:
   schedule:
@@ -17,7 +17,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - name: Report, exchange data, plan
+      - name: Exchange data, learning, report, plan, portfolio, weekly, health
         env:
           APP_URL: ${{ secrets.APEX_APP_URL }}
           CRON_SECRET: ${{ secrets.APEX_CRON_SECRET }}
@@ -26,7 +26,7 @@ jobs:
             echo "APEX_APP_URL / APEX_CRON_SECRET not set — skipping."
             exit 0
           fi
-          for step in report exchange plan; do
+          for step in exchange report learn plan portfolio weekly health; do
             echo "== $step"
             curl --fail-with-body --silent --show-error --max-time 320 \
               -H "Authorization: Bearer $CRON_SECRET" \

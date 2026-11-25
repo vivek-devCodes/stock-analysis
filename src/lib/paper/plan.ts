@@ -7,12 +7,20 @@ import { SHORT_PAGE } from "../exchange/catalog";
 import { interpretMarket, interpretStock, netDirection } from "../exchange/interpret";
 import { getMarketDay, getStockDays, missingFiles } from "../exchange/store";
 import type { ExchangeSignal } from "../exchange/types";
+import { signalMultiplierFn } from "../learn/learned";
 import { getLiveQuotes } from "../live";
+import { notify } from "../notify";
+import { fetchChart } from "../yahoo";
+import { currentGuard, getRegime } from "./guard";
+import { admit, atrPctOf, positionSize } from "./risk";
 import { runScreen } from "../screener";
-import { istDate, istTimeOn, marketPhase, PAPER_SETTINGS, planEntry, SESSION, sizeFor } from "./rules";
-import { claimPendingPlan, finishPlan, getPlan, savePlan } from "./plan-store";
+import { istDate, istTimeOn, marketPhase, orbEntry, PAPER_SETTINGS, SESSION } from "./rules";
+import { activePlanFor, finishPlan, getPlan, planExecutedOn, savePlan } from "./plan-store";
 import { insertTrade } from "./store";
 import type { PaperKind, PaperTrade, PlanExecution, PlanItem, SessionPlan } from "./types";
+import { applyTuning, DEFAULT_TUNING, gateTrade } from "../learn/improve";
+import { currentImprovement, marketAgrees } from "../learn/improve-run";
+import { learnedNote } from "./learned-note";
 
 /**
  * The agent's day:
@@ -21,9 +29,10 @@ import type { PaperKind, PaperTrade, PlanExecution, PlanItem, SessionPlan } from
  *                      walls, deals) after removing restricted stocks (GSM, T2T, tight bands,
  *                      circuits), run the full multi-agent analysis on the best few and save
  *                      tomorrow's intraday plan.
- *   at the open      → executePendingPlan(): the first task of the session — enter each planned
- *                      trade at the live price unless the open gapped through the stop or target,
- *                      or price has already run too far.
+ *   at the open      → executePendingPlan(): the first task of the session — each planned trade
+ *                      waits for the 15-minute opening range, then enters on a breakout in its
+ *                      direction (until 11:00), subject to the risk rules (regime, daily loss,
+ *                      position/sector limits, drawdown pause).
  *   after the close  → the daily report scores every decision (report.ts).
  */
 
@@ -86,13 +95,15 @@ export async function buildNextSessionPlan(force = false): Promise<SessionPlan> 
   const missing: string[] = market ? missingFiles(market) : [];
   if (existing && !force && existing.exchangeDate === (market?.tradeDate ?? null) && !(existing.missingFiles ?? []).some((f) => !missing.includes(f))) return existing;
 
+  const [regime, mult] = await Promise.all([getRegime().catch(() => null), signalMultiplierFn()]);
   const plan: SessionPlan = {
     madeOn,
     createdAt: new Date().toISOString(),
     exchangeDate: market?.tradeDate ?? null,
     missingFiles: missing,
     status: "pending",
-    marketNote: interpretMarket(market).map((s) => `${s.label}: ${s.value}`).join(" · ") || "NSE market data unavailable.",
+    marketNote: [interpretMarket(market).map((s) => `${s.label}: ${s.value}`).join(" · ") || "NSE market data unavailable.", regime ? `Regime: ${regime.level} — ${regime.notes.join("; ")}` : null].filter(Boolean).join(" · "),
+    regime,
     screened: 0,
     items: [],
     skipped: [],
@@ -106,7 +117,9 @@ export async function buildNextSessionPlan(force = false): Promise<SessionPlan> 
   // 1. Every directional intraday setup from the session that just ended.
   const screen = await runScreen("intraday");
   plan.screened = screen.picks.length;
-  const picks = screen.picks.filter((p) => p.bias !== "neutral").sort((a, b) => Math.abs(b.score) - Math.abs(a.score)).slice(0, P.candidates);
+  const directional = screen.picks.filter((p) => p.bias !== "neutral");
+  plan.candidates = directional.map((p) => ({ symbol: p.symbol, side: p.bias === "bullish" ? ("long" as const) : ("short" as const), score: p.score }));
+  const picks = directional.sort((a, b) => Math.abs(b.score) - Math.abs(a.score)).slice(0, P.candidates);
 
   // 2. Exchange data: drop restricted stocks, re-rank by agreement with delivery / F&O / deals.
   const days = market ? await getStockDays(picks.map((p) => base(p.symbol)), market.tradeDate) : new Map();
@@ -114,7 +127,7 @@ export async function buildNextSessionPlan(force = false): Promise<SessionPlan> 
     .map((p) => {
       const sig = interpretStock(days.get(base(p.symbol)) ?? null, null, madeOn);
       const block = sig.find((x) => x.blocks?.includes("intraday"));
-      const { score: ex } = netDirection(sig, DIRECTION_IDS, DIRECTION_WEIGHTS);
+      const { score: ex } = netDirection(sig, DIRECTION_IDS, DIRECTION_WEIGHTS, mult);
       const dir = p.bias === "bullish" ? 1 : -1;
       return { p, sig, block, rank: Math.abs(p.score) + 15 * ex * dir };
     })
@@ -144,37 +157,76 @@ export async function buildNextSessionPlan(force = false): Promise<SessionPlan> 
   return plan;
 }
 
+const fmtMinute = (m: number) => `${Math.floor(m / 60)}:${String(m % 60).padStart(2, "0")}`;
+
 /**
- * First task of the session: enter last night's plan at the live price. Runs at most once per
- * plan (claimed atomically). Only inside the entry window.
+ * First task of the session: work through last night's plan. Each item waits for the opening range
+ * (09:15–09:30) and enters on a breakout in its direction; items still waiting at 11:00 are dropped.
+ * Runs on every paper-trading run until every item is final. Entries are de-duplicated per symbol
+ * per day by the store, so overlapping runs cannot double-enter.
  */
 export async function executePendingPlan(): Promise<PlanExecution | null> {
   const now = nowS();
   if (marketPhase(now) !== "open") return null;
   const today = istDate(now);
-  const plan = await claimPendingPlan(today, istDate(now - P.expireDays * 86400));
+  const plan = await activePlanFor(today, istDate(now - P.expireDays * 86400));
   if (!plan) return null;
 
-  const rows: PlanExecution["rows"] = [];
-  const quotes = plan.items.length ? await getLiveQuotes(plan.items.map((i) => i.symbol)).catch(() => []) : [];
+  const prev = new Map((plan.execution?.rows ?? []).map((r) => [r.symbol, r]));
+  const todo = plan.items.filter((i) => !(prev.get(i.symbol)?.final ?? false));
   const sessionOpen = istTimeOn(now, SESSION.open);
-  for (const item of plan.items) {
+  const pastDeadline = now >= istTimeOn(now, P.orbDeadline);
+  const [guard, quotes, market, learned] = await Promise.all([
+    currentGuard(),
+    todo.length ? getLiveQuotes(todo.map((i) => i.symbol)).catch(() => []) : Promise.resolve([]),
+    getMarketDay().catch(() => null),
+    currentImprovement(),
+  ]);
+  const tuning = learned?.tuning ?? DEFAULT_TUNING;
+  const exch = market && todo.length ? await getStockDays(todo.map((i) => base(i.symbol)), market.tradeDate).catch(() => new Map()) : new Map();
+
+  for (const item of todo) {
     const q = quotes.find((x) => x.symbol === item.symbol);
-    if (!q || q.time < sessionOpen) {
-      rows.push({ symbol: item.symbol, entered: false, reason: "No live price from today's session", price: q?.price ?? null, tradeId: null });
+    const candles = await fetchChart(item.symbol, "1d", "5m")
+      .then((c) => c.candles)
+      .catch(() => []);
+    const d = orbEntry({
+      side: item.side,
+      ref: item.refPrice,
+      stop: item.stop,
+      target: item.target,
+      maxChase: P.maxChasePct,
+      candles,
+      sessionOpen,
+      orbMinutes: tuning.orbMinutes,
+      quote: q && q.time >= sessionOpen ? { price: q.price, time: q.time } : null,
+    });
+    if (d.action !== "enter") {
+      const final = d.action === "skip" || pastDeadline;
+      const reason = d.action === "wait" && pastDeadline ? `No opening-range breakout by ${fmtMinute(P.orbDeadline)} — dropped` : d.reason;
+      prev.set(item.symbol, { symbol: item.symbol, entered: false, reason, price: q?.price ?? null, tradeId: null, final, range: d.range });
       continue;
     }
-    const check = planEntry(item.side, item.refPrice, item.stop, item.target, q.price, P.maxChasePct);
-    if (!check.ok) {
-      rows.push({ symbol: item.symbol, entered: false, reason: check.reason, price: q.price, tradeId: null });
-      continue;
+    let kind = item.kind;
+    let riskNote: string | null = null;
+    // Self-improvement: learned exits, setup gate (blocked setups become shadow) and market direction.
+    const exits = applyTuning(item.side, d.price, item.stop, item.target, tuning);
+    const gate = gateTrade(learned, { origin: "plan", side: item.side, score: item.score });
+    if (kind === "recommended") {
+      riskNote = admit(guard, { symbol: item.symbol, side: item.side });
+      if (!riskNote && !gate.allow) riskNote = gate.note;
+      if (!riskNote && tuning.marketAlign && (await marketAgrees(item.side, d.at)) === false) riskNote = "Against NIFTY's direction since the open (learned market-direction filter)";
+      if (riskNote) kind = "shadow";
     }
-    const qty = sizeFor(q.price, item.stop, PAPER_SETTINGS.capital, PAPER_SETTINGS.riskPct);
+    const learnMult = kind === "recommended" ? gate.sizeMult : 1;
+    const learnNote = learnedNote(tuning, learnMult, gate);
+    const qty = positionSize(d.price, exits.stop, PAPER_SETTINGS.capital, PAPER_SETTINGS.riskPct, { mult: (guard.sizeMult > 0 ? guard.sizeMult : 1) * learnMult, atrPct: atrPctOf(exch.get(base(item.symbol))) });
     if (qty < 1) {
-      rows.push({ symbol: item.symbol, entered: false, reason: "Position size below one share", price: q.price, tradeId: null });
+      prev.set(item.symbol, { symbol: item.symbol, entered: false, reason: "Position size below one share", price: d.price, tradeId: null, final: true, range: d.range });
       continue;
     }
-    const at = new Date(q.time * 1000);
+    const at = new Date(d.at * 1000);
+    const edge = item.side === "long" ? d.range.high : d.range.low;
     const trade: PaperTrade = {
       id: `PT-${today.replace(/-/g, "")}-${item.symbol.replace(/[^A-Z0-9]/gi, "")}`,
       tradeDay: today,
@@ -183,19 +235,27 @@ export async function executePendingPlan(): Promise<PlanExecution | null> {
       openedAt: at.toISOString(),
       trigger: "plan",
       planMadeOn: plan.madeOn,
-      kind: item.kind,
+      kind,
       side: item.side,
       decision: item.decision,
       validation: item.validation,
       score: item.score,
-      entry: q.price,
-      target: item.target,
-      stop: item.stop,
+      entry: d.price,
+      target: exits.target,
+      stop: exits.stop,
       qty,
-      riskReward: Math.abs(item.target - q.price) / Math.abs(q.price - item.stop),
-      reasons: [...item.reasons, `Planned after the ${plan.madeOn} close; entered at the open check (${at.toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit" })} IST, ${q.source}).`],
+      riskReward: Math.abs(exits.target - d.price) / Math.abs(d.price - exits.stop),
+      reasons: [
+        ...item.reasons,
+        `Planned after the ${plan.madeOn} close; entered on the opening-range ${item.side === "long" ? "breakout above" : "breakdown below"} ${edge.toFixed(2)} at ${at.toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit" })} IST.`,
+        ...(riskNote ? [`Risk rule — ${riskNote}`] : []),
+        ...(learnNote ? [`Learned — ${learnNote}`] : []),
+      ],
       votes: item.votes,
       reportId: item.reportId,
+      riskNote,
+      breakEvenR: tuning.breakEvenR,
+      learnNote,
       status: "open",
       exitPrice: null,
       exitAt: null,
@@ -205,9 +265,34 @@ export async function executePendingPlan(): Promise<PlanExecution | null> {
       returnPct: null,
     };
     const inserted = await insertTrade(trade);
-    rows.push({ symbol: item.symbol, entered: inserted, reason: inserted ? `Entered ${item.side} at ${q.price.toFixed(2)}` : "Already traded today", price: q.price, tradeId: inserted ? trade.id : null });
+    prev.set(item.symbol, {
+      symbol: item.symbol,
+      entered: inserted,
+      reason: inserted ? `Entered ${item.side} at ${d.price.toFixed(2)}${riskNote ? ` as shadow (${riskNote})` : ""}` : "Already traded today",
+      price: d.price,
+      tradeId: inserted ? trade.id : null,
+      final: true,
+      range: d.range,
+    });
+    if (inserted && kind === "recommended") void notify.entry(trade).catch(() => undefined);
   }
-  const execution: PlanExecution = { day: today, at: new Date().toISOString(), rows };
-  await finishPlan({ ...plan, status: "executed", execution });
+
+  const rows = plan.items.map((i) => prev.get(i.symbol)).filter((r): r is NonNullable<typeof r> => Boolean(r));
+  const risk = guard.reasons.length ? guard.reasons : guard.regime ? [`Regime ${guard.regime.level}: ${guard.regime.notes.join("; ")}`] : [];
+  const execution: PlanExecution = { day: today, at: new Date().toISOString(), rows, risk };
+  const allFinal = rows.length === plan.items.length && rows.every((r) => r.final !== false);
+  await finishPlan({ ...plan, status: allFinal ? "executed" : "executing", execution });
   return execution;
+}
+
+/**
+ * After the session: a plan still "executing" (no run reached the breakout deadline) is closed out —
+ * items still waiting are recorded as dropped. Called by the daily report.
+ */
+export async function closeOutPlan(day: string): Promise<void> {
+  const plan = await planExecutedOn(day);
+  if (!plan || plan.status !== "executing" || !plan.execution) return;
+  const rows = plan.execution.rows.map((r) => (r.final === false ? { ...r, final: true, reason: `No opening-range breakout by ${fmtMinute(P.orbDeadline)} — dropped` } : r));
+  for (const i of plan.items) if (!rows.some((r) => r.symbol === i.symbol)) rows.push({ symbol: i.symbol, entered: false, reason: "Not checked during the session", price: null, tradeId: null, final: true });
+  await finishPlan({ ...plan, status: "executed", execution: { ...plan.execution, rows } });
 }

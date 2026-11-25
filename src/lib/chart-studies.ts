@@ -211,7 +211,7 @@ export function sessionVwap(c: Candle[]): Point[] {
 export type ChartSignal = {
   time: number;
   side: "buy" | "sell";
-  source: "supertrend" | "golden-cross" | "engine";
+  source: "supertrend" | "golden-cross" | "engine" | "structure" | "pattern";
   label: string;
   detail: string;
 };

@@ -1,11 +1,13 @@
 import {
   BookOpen,
   Bot,
+  Briefcase,
   Building2,
   CandlestickChart,
   Clock,
   Filter,
   FlaskConical,
+  Gauge,
   LayoutDashboard,
   Landmark,
   LineChart,
@@ -40,6 +42,8 @@ export const NAV_GROUPS: Array<{ title: string; items: NavItem[] }> = [
       { href: "/dashboard/long-term", label: "Long Term", icon: Landmark, description: "3–12 month positional ideas", tone: "text-up" },
       { href: "/dashboard/options", label: "Options", icon: Repeat, description: "CALL / PUT direction with ATM strike", tone: "text-[#b18cff]" },
       { href: "/paper-trading", label: "Paper Trading", icon: FlaskConical, description: "The AI agent's intraday calls, traded on paper and scored automatically", tone: "text-[#fb923c]" },
+      { href: "/scorecard", label: "Scorecard", icon: Gauge, description: "Which signals, agents and scores really work — vs baselines, fed back into the agent", tone: "text-[#22d3ee]" },
+      { href: "/portfolio", label: "Portfolio", icon: Briefcase, description: "Momentum + quality basket, rebalanced monthly, measured against NIFTY 50", tone: "text-[#34d399]" },
     ],
   },
   {

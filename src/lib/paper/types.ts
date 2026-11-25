@@ -2,11 +2,12 @@
 // Keep this file free of server-only imports.
 
 import type { AgentId, Bias, Decision, Validation } from "../agents/types";
+import type { Regime } from "./regime";
 
 export type PaperSide = "long" | "short";
 
-/** open → exactly one of: target hit, stop hit, or squared off at the intraday cut-off. */
-export type PaperStatus = "open" | "target" | "stop" | "square-off";
+/** open → exactly one of: target hit, stop hit, stopped at entry after the break-even move, or squared off at the intraday cut-off. */
+export type PaperStatus = "open" | "target" | "stop" | "breakeven" | "square-off";
 
 /**
  * recommended — the agent said BUY / SELL (APPROVED) or WATCHLIST (approved with conditions).
@@ -41,6 +42,12 @@ export type PaperTrade = {
   reasons: string[];
   votes: AgentVote[];
   reportId: string | null;
+  /** Set when the agent recommended the trade but a risk rule demoted it to shadow. */
+  riskNote?: string | null;
+  /** Break-even rule this trade was opened with (learned; older trades use the default). */
+  breakEvenR?: number | null;
+  /** What the self-improvement engine changed for this trade (size, stop/target), if anything. */
+  learnNote?: string | null;
   status: PaperStatus;
   exitPrice: number | null;
   exitAt: string | null;
@@ -69,6 +76,8 @@ export type PaperRunResult = {
   errors: string[];
   /** Last night's plan, executed first at the open (null when there was none pending). */
   plan?: PlanExecution | null;
+  /** Risk-rule and market-regime notes that applied to this run. */
+  risk?: string[];
 };
 
 /* ------------------------------ Next-session plan (built after the close) ------------------------------ */
@@ -96,9 +105,19 @@ export type PlanItem = {
   reportId: string | null;
 };
 
-export type PlanExecutionRow = { symbol: string; entered: boolean; reason: string; price: number | null; tradeId: string | null };
+export type PlanExecutionRow = {
+  symbol: string;
+  entered: boolean;
+  reason: string;
+  price: number | null;
+  tradeId: string | null;
+  /** False while the item is still waiting for its opening-range breakout. */
+  final?: boolean;
+  /** Opening range (first 15 minutes) used for the breakout entry. */
+  range?: { high: number; low: number } | null;
+};
 
-export type PlanExecution = { day: string; at: string; rows: PlanExecutionRow[] };
+export type PlanExecution = { day: string; at: string; rows: PlanExecutionRow[]; risk?: string[] };
 
 export type SessionPlan = {
   /** IST date of the session the plan was made after. */
@@ -113,6 +132,10 @@ export type SessionPlan = {
   screened: number;
   items: PlanItem[];
   skipped: Array<{ symbol: string; reason: string }>;
+  /** Every directional candidate the screen produced (for the random-picks baseline). */
+  candidates?: Array<{ symbol: string; side: PaperSide; score: number }>;
+  /** Market regime when the plan was built. */
+  regime?: Regime | null;
   errors: string[];
   execution: PlanExecution | null;
 };

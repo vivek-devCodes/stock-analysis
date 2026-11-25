@@ -8,7 +8,7 @@ import type { PaperRunResult, PaperTrade } from "./types";
  * serverless instances — the page says so.
  */
 
-const memory = { trades: new Map<string, PaperTrade>(), runs: new Map<string, PaperRunResult | null>() };
+const memory = { trades: new Map<string, PaperTrade>(), runs: new Map<string, PaperRunResult | null>(), flags: new Map<string, { at: string; summary: unknown }>() };
 
 export async function isPersisted() {
   return (await getDb()) != null;
@@ -101,5 +101,37 @@ export async function autoRanOn(day: string): Promise<boolean> {
   const db = await getDb();
   if (!db) return memory.runs.has(key);
   const rows = await db.query<{ run_key: string }>(`select run_key from paper_runs where run_key = $1`, [key]);
+  return rows.length > 0;
+}
+
+/* ---------------- Flags (paper_runs rows): drawdown reset, once-only emails, health ---------------- */
+
+export async function getFlag(key: string): Promise<{ at: string; summary: unknown } | null> {
+  const db = await getDb();
+  if (!db) return memory.flags.get(key) ?? null;
+  const rows = await db.query<{ at: string | Date; summary: unknown }>(`select at, summary from paper_runs where run_key = $1`, [key]);
+  if (!rows[0]) return null;
+  const at = rows[0].at instanceof Date ? rows[0].at.toISOString() : new Date(rows[0].at).toISOString();
+  return { at, summary: typeof rows[0].summary === "string" ? JSON.parse(rows[0].summary) : rows[0].summary };
+}
+
+export async function setFlag(key: string, summary: unknown = null): Promise<void> {
+  const db = await getDb();
+  if (!db) {
+    memory.flags.set(key, { at: new Date().toISOString(), summary });
+    return;
+  }
+  await db.query(`insert into paper_runs (run_key, at, summary) values ($1, now(), $2::jsonb) on conflict (run_key) do update set at = now(), summary = excluded.summary`, [key, JSON.stringify(summary)]);
+}
+
+/** True the first time `key` is claimed (for once-only jobs such as the weekly email). */
+export async function claimOnce(key: string): Promise<boolean> {
+  const db = await getDb();
+  if (!db) {
+    if (memory.flags.has(key)) return false;
+    memory.flags.set(key, { at: new Date().toISOString(), summary: null });
+    return true;
+  }
+  const rows = await db.query<{ run_key: string }>(`insert into paper_runs (run_key) values ($1) on conflict (run_key) do nothing returning run_key`, [key]);
   return rows.length > 0;
 }

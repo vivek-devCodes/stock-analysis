@@ -4,11 +4,18 @@ import { mapLimit, shortlist } from "../agents/scan";
 import type { AnalysisReport } from "../agents/types";
 import { getLiveQuotes } from "../live";
 import { fetchChart } from "../yahoo";
+import { getMarketDay, getStockDays } from "../exchange/store";
+import { notify } from "../notify";
+import { currentGuard } from "./guard";
 import { executePendingPlan } from "./plan";
+import { admit, atrPctOf, positionSize } from "./risk";
 import { latestPlan, listDailyReports } from "./plan-store";
 import { istDate, marketPhase, PAPER_SETTINGS, PHASE_LABEL, pnl, replayTrade } from "./rules";
 import { autoRanOn, claimAutoRun, insertTrade, isPersisted, listTrades, openTrades, releaseAutoRun, saveAutoRun, symbolsTradedOn, updateTrade } from "./store";
 import type { MarketPhase, PaperKind, PaperRunResult, PaperSnapshot, PaperTrade, PaperTradeView } from "./types";
+import { applyTuning, DEFAULT_TUNING, gateTrade, type Tuning } from "../learn/improve";
+import { currentImprovement, marketAgrees } from "../learn/improve-run";
+import { THRESHOLDS } from "../agents/thresholds";
 
 /**
  * Intraday paper trading driven by the AI Analyst.
@@ -32,18 +39,21 @@ async function livePhase(): Promise<MarketPhase> {
   return phase;
 }
 
-function toTrade(r: AnalysisReport, trigger: "auto" | "manual", day: string): { trade: PaperTrade } | { reason: string } {
+function toTrade(r: AnalysisReport, trigger: "auto" | "manual", day: string, sizing: { mult: number; atrPct: number | null }, tuning: Tuning = DEFAULT_TUNING): { trade: PaperTrade } | { reason: string } {
   const plan = r.risk.plan;
   if (r.validation === "INSUFFICIENT DATA") return { reason: "Insufficient data" };
   if (!plan) return { reason: `${r.decision} — no directional plan` };
   const kind: PaperKind = r.decision === "BUY" || r.decision === "SELL" || r.decision === "WATCHLIST" ? "recommended" : "shadow";
   const side = plan.direction;
   const entry = r.price.value ?? (side === "long" ? plan.entryHigh : plan.entryLow);
-  const target = plan.targets[0];
-  const stop = plan.stop;
-  const sane = side === "long" ? stop < entry && entry < target : target < entry && entry < stop;
-  if (!sane || !Number.isFinite(entry) || entry <= 0) return { reason: "Price already beyond the stop or target" };
-  const qty = plan.quantity > 0 ? plan.quantity : Math.floor(PAPER_SETTINGS.capital / entry);
+  const planned = { stop: plan.stop, target: plan.targets[0] };
+  const sanePlan = side === "long" ? planned.stop < entry && entry < planned.target : planned.target < entry && entry < planned.stop;
+  if (!sanePlan || !Number.isFinite(entry) || entry <= 0) return { reason: "Price already beyond the stop or target" };
+  // Learned exits (self-improvement engine): stop width, target and break-even rule.
+  const { stop, target } = applyTuning(side, entry, planned.stop, planned.target, tuning);
+  const changedExits = stop !== planned.stop || target !== planned.target;
+  // Fixed-risk sizing, scaled by the market regime and cut for volatile stocks (risk.ts).
+  const qty = positionSize(entry, stop, PAPER_SETTINGS.capital, PAPER_SETTINGS.riskPct, sizing);
   if (qty < 1) return { reason: "Position size below one share" };
 
   const tech = r.agents.find((a) => a.agent === "technical");
@@ -73,6 +83,8 @@ function toTrade(r: AnalysisReport, trigger: "auto" | "manual", day: string): { 
       reasons,
       votes: r.agents.map((a) => ({ agent: a.agent, bias: a.bias, score: a.score })),
       reportId: r.id,
+      breakEvenR: tuning.breakEvenR,
+      learnNote: [changedExits ? `exits adjusted to stop ${stop.toFixed(2)} / target ${target.toFixed(2)} (was ${planned.stop.toFixed(2)} / ${planned.target.toFixed(2)})` : null, sizing.mult < 1 ? `size ×${sizing.mult.toFixed(2)}` : null].filter(Boolean).join("; ") || null,
       status: "open",
       exitPrice: null,
       exitAt: null,
@@ -112,6 +124,12 @@ export async function runPaperAgent(trigger: "auto" | "manual"): Promise<PaperRu
     for (const s of symbols.filter((x) => already.has(x))) result.notTraded.push({ symbol: s, reason: "Already traded today" });
     if (!symbols.length) result.skipped = "The intraday scanner found no directional setups right now.";
 
+    // Risk rules: regime, daily loss limit, drawdown pause, position and sector limits.
+    const [guard, learned] = await Promise.all([currentGuard(), currentImprovement()]);
+    const tuning = learned?.tuning ?? DEFAULT_TUNING;
+    result.risk = guard.reasons.length ? guard.reasons : guard.regime ? [`Regime ${guard.regime.level}: ${guard.regime.notes.join("; ")}`] : [];
+    const market = await getMarketDay().catch(() => null);
+    const exch = market ? await getStockDays(fresh, market.tradeDate).catch(() => new Map()) : new Map();
     const reports = await mapLimit(fresh, 2, (s) =>
       runAnalysis({ symbol: s, horizon: "intraday" }).catch((e) => {
         result.errors.push(`${s}: ${e instanceof Error ? e.message : String(e)}`);
@@ -121,12 +139,29 @@ export async function runPaperAgent(trigger: "auto" | "manual"): Promise<PaperRu
     for (const r of reports) {
       if (!r) continue;
       result.analysed += 1;
-      const t = toTrade(r, trigger, day);
+      const atrPct = atrPctOf(exch.get(r.instrument.symbol.replace(/\.(NS|BO)$/, "")));
+      const gate = r.risk.plan ? gateTrade(learned, { origin: "live", side: r.risk.plan.direction, score: r.score.total }) : null;
+      const learnMult = gate && gate.allow ? gate.sizeMult : 1;
+      const t = toTrade(r, trigger, day, { mult: (guard.sizeMult > 0 ? guard.sizeMult : 1) * learnMult, atrPct }, tuning);
       if ("reason" in t) {
         result.notTraded.push({ symbol: r.instrument.symbol, reason: t.reason });
         continue;
       }
-      if (await insertTrade(t.trade)) result.opened.push({ symbol: t.trade.symbol, kind: t.trade.kind, side: t.trade.side, decision: t.trade.decision });
+      if (t.trade.kind === "recommended") {
+        let blocked = admit(guard, { symbol: t.trade.symbol, side: t.trade.side });
+        if (!blocked && gate && !gate.allow) blocked = gate.note;
+        if (!blocked && tuning.marketAlign && (await marketAgrees(t.trade.side, Math.floor(Date.parse(t.trade.openedAt) / 1000))) === false) blocked = "Against NIFTY's direction since the open (learned market-direction filter)";
+        if (blocked) {
+          // Still paper-traded, as shadow, so we learn whether the risk rule helped.
+          t.trade.kind = "shadow";
+          t.trade.riskNote = blocked;
+          t.trade.reasons = [...t.trade.reasons, `Risk rule — ${blocked}`];
+        }
+      }
+      if (await insertTrade(t.trade)) {
+        result.opened.push({ symbol: t.trade.symbol, kind: t.trade.kind, side: t.trade.side, decision: t.trade.decision });
+        if (t.trade.kind === "recommended") void notify.entry(t.trade).catch(() => undefined);
+      }
       else result.notTraded.push({ symbol: t.trade.symbol, reason: "Already traded today" });
     }
   } catch (e) {
@@ -162,10 +197,10 @@ export async function settleOpenTrades(force = false): Promise<{ checked: number
       return;
     }
     for (const t of trades) {
-      const res = replayTrade({ side: t.side, entry: t.entry, target: t.target, stop: t.stop, openedAt: Math.floor(Date.parse(t.openedAt) / 1000) }, candles, nowS());
+      const res = replayTrade({ side: t.side, entry: t.entry, target: t.target, stop: t.stop, openedAt: Math.floor(Date.parse(t.openedAt) / 1000) }, candles, nowS(), 300, t.breakEvenR ?? THRESHOLDS.guard.breakEvenR);
       if (!res) continue;
       const p = pnl(t.side, t.entry, res.exitPrice, t.qty);
-      await updateTrade({
+      const done: PaperTrade = {
         ...t,
         status: res.status,
         exitPrice: res.exitPrice,
@@ -174,8 +209,10 @@ export async function settleOpenTrades(force = false): Promise<{ checked: number
         costs: p.costs,
         netPnl: p.net,
         returnPct: p.returnPct,
-      });
+      };
+      await updateTrade(done);
       closed += 1;
+      if (done.kind === "recommended") void notify.exit(done).catch(() => undefined);
     }
   });
   return { checked: open.length, closed, errors };

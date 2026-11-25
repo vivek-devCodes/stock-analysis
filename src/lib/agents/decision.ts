@@ -18,6 +18,7 @@ import type {
   Validation,
   ValidatorReport,
 } from "./types";
+import { levelAssessment, levelContext } from "../levels";
 
 /* ------------------------------------- Scoring (spec §6) ------------------------------------- */
 
@@ -41,8 +42,9 @@ export function bandOf(score: number | null): string {
  * Weighted score over the agents that could actually score. For a bearish setup the agents'
  * bullishness is inverted (100 − score), so the total measures support for the PROPOSED direction.
  */
-export function scoreAll(agents: AgentResult[], horizon: Horizon, direction: Bias): ScoreBreakdown {
-  const weights = WEIGHTS[horizon];
+export function scoreAll(agents: AgentResult[], horizon: Horizon, direction: Bias, adapted: Record<AgentId, number> | null = null): ScoreBreakdown {
+  // Adapted weights come from the learning loop (src/lib/learn) once there is enough paper-trading evidence.
+  const weights = adapted ?? WEIGHTS[horizon];
   let sum = 0;
   let used = 0;
   let total = 0;
@@ -173,9 +175,28 @@ export function riskAgent(d: DataSnapshot, direction: Bias, capitalIn: number | 
 
   const entry = d.live?.price ?? p.entry;
   // Long-term invalidation: 3% under the 200-day average, but never more than 15% below entry.
-  const stop = longTermThesis || p.stop == null ? Math.max((d.ind?.sma200 ?? 0) * 0.97, entry * (1 - T.risk.longTermMaxStopPct / 100)) : p.stop;
+  let stop = longTermThesis || p.stop == null ? Math.max((d.ind?.sma200 ?? 0) * 0.97, entry * (1 - T.risk.longTermMaxStopPct / 100)) : p.stop;
+  let t1Raw = !longTermThesis && p.target != null ? p.target : null;
+  // Level-aware placement (src/lib/levels.ts): put the stop just beyond the nearest support /
+  // resistance zone instead of inside it, and the target just before the next opposing zone.
+  const lv = !longTermThesis ? levelContext(d.daily.slice(-250)) : null;
+  const la = lv ? levelAssessment(lv, long ? "long" : "short") : null;
+  if (la) {
+    const baseDist = Math.abs(entry - stop);
+    if (la.stop != null && (long ? la.stop < entry : la.stop > entry)) {
+      const m = Math.abs(entry - la.stop) / baseDist;
+      if (m >= 0.6 && m <= 1.6) {
+        checks.push({ name: "Level-based stop", status: "pass", detail: `Stop moved to ${la.stop.toFixed(2)}, just ${long ? "below the support" : "above the resistance"} zone (was ${stop.toFixed(2)}).` });
+        stop = la.stop;
+      }
+    }
+    if (la.target != null && t1Raw != null && (long ? la.target > entry && la.target < t1Raw : la.target < entry && la.target > t1Raw)) {
+      checks.push({ name: "Level-based target", status: "warn", detail: `Target 1 brought in to ${la.target.toFixed(2)}, before the ${long ? "resistance" : "support"} zone (was ${t1Raw.toFixed(2)}).` });
+      t1Raw = la.target;
+    }
+  }
   const dist = Math.abs(entry - stop);
-  const t1 = !longTermThesis && p.target != null ? p.target : long ? entry + 2 * dist : entry - 2 * dist;
+  const t1 = t1Raw != null ? t1Raw : long ? entry + 2 * dist : entry - 2 * dist;
   const t2 = long ? entry + 1.5 * Math.abs(t1 - entry) : entry - 1.5 * Math.abs(t1 - entry);
   const rr = dist > 0 ? Math.abs(t1 - entry) / dist : null;
   const costRate = d.horizon === "intraday" ? INTRADAY_COST : CALIBRATION_META.costRoundTrip;
