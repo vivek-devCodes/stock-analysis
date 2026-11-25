@@ -306,17 +306,20 @@ export function ownershipAgent(d: DataSnapshot): AgentResult {
   const ids = ["delivery", "volume", "deals", "52w"];
   const sig = view.signals.filter((x) => ids.includes(x.id));
   const { score: dir, used } = netDirection(view.signals, ids, { delivery: 2, deals: 1.5, volume: 1, "52w": 1 });
-  const score = clamp(Math.round(50 + dir * 25));
+  // SEBI PIT disclosures: promoters / directors / KMP buying (or selling) in the open market.
+  const it = d.insider;
+  const insiderTilt = it ? (it.direction === "buying" ? Math.round(it.insiderScore / 5) : -Math.min(15, Math.round(Math.log10(Math.max(1, -it.netValue / 1e5)) * 5))) : 0;
+  const score = clamp(Math.round(50 + dir * 25 + insiderTilt));
   const bseShare = s.bse && s.bse.volume + s.volume > 0 ? (s.bse.volume / (s.bse.volume + s.volume)) * 100 : null;
   const directional = sig.filter((x) => x.effect === "bullish" || x.effect === "bearish");
   return {
     agent: "ownership",
     status: "ok",
     score,
-    bias: used ? biasOf(score) : "neutral",
-    summary: directional.length
+    bias: used || insiderTilt !== 0 ? biasOf(score) : "neutral",
+    summary: (it ? `Insiders ${it.direction === "buying" ? "bought" : "sold"} ₹${(Math.abs(it.netValue) / 1e5).toFixed(1)} lakh net in the open market this week (${it.buyers} buyer${it.buyers === 1 ? "" : "s"}, ${it.sellers} seller${it.sellers === 1 ? "" : "s"}). ` : "") + (directional.length
       ? `${directional.map((x) => x.label).join("; ")} in the ${day} session.`
-      : `No unusual delivery, volume or deal activity in the ${day} session (delivery ${s.deliveryPct != null ? `${s.deliveryPct.toFixed(0)}%` : "—"}).`,
+      : `No unusual delivery, volume or deal activity in the ${day} session (delivery ${s.deliveryPct != null ? `${s.deliveryPct.toFixed(0)}%` : "—"}).`),
     findings: [
       { label: "Delivery %", value: s.deliveryPct != null ? `${s.deliveryPct.toFixed(1)}%` : "—" },
       { label: "Delivery avg", value: s.deliveryAvg != null ? `${s.deliveryAvg.toFixed(1)}% (${s.historyDays}d)` : "no history yet" },
@@ -325,9 +328,13 @@ export function ownershipAgent(d: DataSnapshot): AgentResult {
       { label: "52-week high / low", value: `${num(s.wk52High)} / ${num(s.wk52Low)}` },
       ...(bseShare != null ? [{ label: "BSE share of volume", value: `${bseShare.toFixed(0)}%` }] : []),
       ...(ins != null ? [{ label: "Promoter / insider holding", value: `${ins.toFixed(1)}%` }] : []),
+      ...(it ? [{ label: "Insider trades (7d)", value: `${it.direction === "buying" ? "+" : "−"}₹${(Math.abs(it.netValue) / 1e5).toFixed(1)} L · score ${it.insiderScore}`, tone: it.direction === "buying" ? ("up" as const) : ("down" as const) }] : []),
       ...sig.map(signalFinding),
     ],
-    evidence: sig.map((x) => `${x.label}: ${x.value} — ${x.detail}`),
+    evidence: [
+      ...(it ? it.people.slice(0, 4).map((p) => `${p.type === "Buy" ? "Bought" : "Sold"} ₹${(p.value / 1e5).toFixed(1)} L — ${p.person} (${p.category})${p.date ? `, ${p.date}` : ""} [NSE insider-trading disclosure]`) : []),
+      ...sig.map((x) => `${x.label}: ${x.value} — ${x.detail}`),
+    ],
     warnings: [
       "Quarterly shareholding (FII/DII/MF holdings, promoter pledges) is not connected — NSE serves it only through its website API.",
       ...(s.historyDays === 0 ? ["No stored history yet, so delivery and volume are not compared with their averages."] : []),

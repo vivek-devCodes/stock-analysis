@@ -21,6 +21,9 @@ import type { PaperKind, PaperTrade, PlanExecution, PlanItem, SessionPlan } from
 import { applyTuning, DEFAULT_TUNING, gateTrade } from "../learn/improve";
 import { currentImprovement, marketAgrees } from "../learn/improve-run";
 import { learnedNote } from "./learned-note";
+import { latestScreen } from "../insider/run";
+import { compassAgainst } from "../compass/core";
+import { currentCompass, recordCompass } from "../compass/fetch";
 
 /**
  * The agent's day:
@@ -138,8 +141,24 @@ export async function buildNextSessionPlan(force = false): Promise<SessionPlan> 
     .sort((a, b) => b.rank - a.rank);
   for (const x of ranked.slice(P.analysed)) plan.skipped.push({ symbol: x.p.symbol, reason: "Lower ranked after exchange data" });
 
-  // 3. Full multi-agent analysis on the best few.
+  // 3. Full multi-agent analysis on the best few — plus up to 2 insider-buying stocks whose daily
+  //    chart is "Setup ready" (NSE insider-trading strategy), if the screen didn't already find them.
+  const insider = await latestScreen().catch(() => null);
+  const insiderReady = (insider?.buying ?? []).filter((p) => p.chart.verdict === "ready").slice(0, 6);
+  const insiderBonus = new Map(insiderReady.map((p) => [`${p.symbol}.NS`, p]));
+  for (const x of ranked) {
+    const ip = insiderBonus.get(x.p.symbol);
+    if (ip && x.p.bias === "bullish") x.rank += ip.insiderScore / 4;
+    if (insider?.selling.some((s) => `${s.symbol}.NS` === x.p.symbol) && x.p.bias === "bullish") x.rank -= 10;
+  }
+  ranked.sort((a, b) => b.rank - a.rank);
   const chosen = ranked.slice(0, P.analysed);
+  for (const ip of insiderReady) {
+    if (chosen.length >= P.analysed + 2) break;
+    const sym = `${ip.symbol}.NS`;
+    if (chosen.some((c) => c.p.symbol === sym)) continue;
+    chosen.push({ p: { symbol: sym, bias: "bullish", score: ip.rank } as (typeof chosen)[number]["p"], sig: [], block: undefined, rank: ip.rank });
+  }
   const reports = await mapLimit(chosen, 2, (x) =>
     runAnalysis({ symbol: x.p.symbol, horizon: "intraday" }).catch((e) => {
       plan.errors.push(`${x.p.symbol}: ${e instanceof Error ? e.message : String(e)}`);
@@ -183,6 +202,10 @@ export async function executePendingPlan(): Promise<PlanExecution | null> {
     currentImprovement(),
   ]);
   const tuning = learned?.tuning ?? DEFAULT_TUNING;
+  // Market Compass (global cues, GIFT Nifty, pre-open breadth, VIX): recorded once the pre-open
+  // session has data, and used to halve the size of trades it argues against.
+  const compass = await currentCompass().then((c) => c.compass).catch(() => null);
+  if (compass) await recordCompass(compass).catch(() => undefined);
   const exch = market && todo.length ? await getStockDays(todo.map((i) => base(i.symbol)), market.tradeDate).catch(() => new Map()) : new Map();
 
   for (const item of todo) {
@@ -218,8 +241,9 @@ export async function executePendingPlan(): Promise<PlanExecution | null> {
       if (!riskNote && tuning.marketAlign && (await marketAgrees(item.side, d.at)) === false) riskNote = "Against NIFTY's direction since the open (learned market-direction filter)";
       if (riskNote) kind = "shadow";
     }
-    const learnMult = kind === "recommended" ? gate.sizeMult : 1;
-    const learnNote = learnedNote(tuning, learnMult, gate);
+    const against = compassAgainst(compass, item.side);
+    const learnMult = kind === "recommended" ? gate.sizeMult * (against >= 0.5 ? 0.5 : 1) : 1;
+    const learnNote = [learnedNote(tuning, learnMult, gate), against >= 0.5 ? `Market Compass against (${compass?.biasText}) — half size` : null].filter(Boolean).join("; ") || null;
     const qty = positionSize(d.price, exits.stop, PAPER_SETTINGS.capital, PAPER_SETTINGS.riskPct, { mult: (guard.sizeMult > 0 ? guard.sizeMult : 1) * learnMult, atrPct: atrPctOf(exch.get(base(item.symbol))) });
     if (qty < 1) {
       prev.set(item.symbol, { symbol: item.symbol, entered: false, reason: "Position size below one share", price: d.price, tradeId: null, final: true, range: d.range });

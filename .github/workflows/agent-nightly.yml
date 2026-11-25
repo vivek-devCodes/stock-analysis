@@ -26,7 +26,7 @@ jobs:
             echo "APEX_APP_URL / APEX_CRON_SECRET not set — skipping."
             exit 0
           fi
-          for step in exchange report learn plan portfolio weekly health; do
+          for step in exchange insider report learn plan portfolio weekly health; do
             echo "== $step"
             curl --fail-with-body --silent --show-error --max-time 320 \
               -H "Authorization: Bearer $CRON_SECRET" \

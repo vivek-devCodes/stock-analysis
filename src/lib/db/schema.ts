@@ -153,6 +153,28 @@ export const SCHEMA: string[] = [
     nifty double precision,
     data jsonb
   )`,
+  // Insider-trading strategy: each NSE PIT disclosure parsed once, and each day's screen (kept so
+  // its picks can be scored against what the market did next).
+  `create table if not exists insider_filings (
+    app_id text primary key,
+    symbol text not null,
+    disclosed_at timestamptz not null,
+    txns jsonb not null,
+    fetched_at timestamptz not null default now()
+  )`,
+  `create index if not exists insider_filings_disclosed on insider_filings (disclosed_at)`,
+  `create table if not exists insider_screens (
+    day text primary key,
+    created_at timestamptz not null default now(),
+    data jsonb not null
+  )`,
+  // Market Compass: the morning opening-bias reading per day and how it turned out.
+  `create table if not exists market_compass (
+    day text primary key,
+    created_at timestamptz not null default now(),
+    data jsonb not null,
+    outcome jsonb
+  )`,
   `create table if not exists audit_log (
     id bigserial primary key,
     at timestamptz not null default now(),

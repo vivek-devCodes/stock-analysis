@@ -9,6 +9,8 @@ import { buildNextSessionPlan } from "@/lib/paper/plan";
 import { buildDailyReport } from "@/lib/paper/report";
 import { istDate } from "@/lib/paper/rules";
 import { runPortfolio } from "@/lib/portfolio/engine";
+import { runInsiderScreen, scoreScreens } from "@/lib/insider/run";
+import { gradeCompass } from "@/lib/compass/fetch";
 
 /**
  * After-the-close job (Vercel Cron 19:15 IST; GitHub Actions 21:00 IST runs each step separately),
@@ -26,7 +28,7 @@ import { runPortfolio } from "@/lib/portfolio/engine";
  */
 export const maxDuration = 300;
 
-const STEPS = ["exchange", "report", "learn", "plan", "portfolio", "weekly", "health"] as const;
+const STEPS = ["exchange", "insider", "report", "learn", "plan", "portfolio", "weekly", "health"] as const;
 type Step = (typeof STEPS)[number];
 const ms = (start: number) => Date.now() - start;
 
@@ -68,6 +70,14 @@ export async function GET(request: NextRequest) {
     return { tradeDate: r.tradeDate, refreshed: r.refreshed, backfilled: r.backfilled, files: r.sources.map((s) => `${s.id}:${s.ok ? "ok" : s.error}`), note: r.note };
   });
 
+  // Insider-trading strategy: NSE PIT disclosures → per-stock insider buying → daily chart check.
+  // Before "plan", so tomorrow's plan can use the screen; past screens are scored here too.
+  await attempt("insider", async () => {
+    const s = await runInsiderScreen();
+    const scored = await scoreScreens().catch((e) => ({ error: e instanceof Error ? e.message : String(e) }));
+    return { filings: s.filings, fetchedNow: s.fetchedNow, buying: s.buying.length, ready: s.buying.filter((p) => p.chart.verdict === "ready").map((p) => p.symbol), errors: s.errors, scored };
+  });
+
   await attempt("report", async () => {
     const r = await buildDailyReport(today);
     return r ? { headline: r.headline, emailed: r.emailed } : { skipped: "No paper trades or executed plan today." };
@@ -77,7 +87,8 @@ export async function GET(request: NextRequest) {
     const r = await runLearning();
     // Self-improvement: post-mortem every closed trade, re-test exits, update the setup ledger.
     const imp = await runImprovement().catch((e) => ({ error: e instanceof Error ? e.message : String(e) }));
-    return { signalDaysScored: r.signalDays, baselineDays: r.baselineDays, weightsAdapted: r.weights.adapted, notes: r.weights.notes, muted: r.muted, improve: imp };
+    const compass = await gradeCompass().catch((e) => ({ error: e instanceof Error ? e.message : String(e) }));
+    return { signalDaysScored: r.signalDays, baselineDays: r.baselineDays, weightsAdapted: r.weights.adapted, notes: r.weights.notes, muted: r.muted, improve: imp, compass };
   });
 
   await attempt("plan", async () => {

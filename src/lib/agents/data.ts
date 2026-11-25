@@ -12,6 +12,8 @@ import { SECTORS } from "../stock-universe";
 import type { Candle, Indicators, Insight, LiveQuote, NewsItem } from "../types";
 import { fetchChart, fetchNews } from "../yahoo";
 import type { Horizon, SourceRef } from "./types";
+import type { InsiderStock } from "../insider/core";
+import { insiderFor } from "../insider/run";
 
 /**
  * Stage 1 — Data collection and validation. Everything downstream works from this snapshot,
@@ -48,6 +50,8 @@ export type DataSnapshot = {
   exchangeData: StockExchangeView | null;
   /** Market-wide exchange data (breadth, FII positioning, NIFTY options). */
   exchangeMarket: MarketDay | null;
+  /** Promoter / director / KMP open-market trades disclosed to NSE in the last week (SEBI PIT). */
+  insider: InsiderStock | null;
   errors: string[];
   sources: SourceRef[];
 };
@@ -111,7 +115,7 @@ export async function collectData(rawSymbol: string, horizon: Horizon): Promise<
   const sector = SECTOR_OF.get(symbol) ?? "Other";
   const sectorSym = SECTOR_INDEX[sector];
 
-  const [dailyRes, weeklyRes, liveRes, scanRes, fundamentals, news, niftyRes, sectorRes, vixRes, macroRes, exchangeData, exchangeMarket] = await Promise.all([
+  const [dailyRes, weeklyRes, liveRes, scanRes, fundamentals, news, niftyRes, sectorRes, vixRes, macroRes, exchangeData, exchangeMarket, insider] = await Promise.all([
     settle("Daily candles", errors, fetchChart(symbol, "2y", "1d")),
     settle("Weekly candles", errors, fetchChart(symbol, "5y", "1wk")),
     settle("Live quote", errors, getLiveQuotes([symbol]).then((q) => q[0] ?? null)),
@@ -128,6 +132,7 @@ export async function collectData(rawSymbol: string, horizon: Horizon): Promise<
     Promise.all(MACRO.map((m) => settle(m.label, errors, fetchChart(m.symbol, "3mo", "1d")))),
     settle("NSE exchange data", errors, getStockView(symbol)),
     settle("NSE market data", errors, getMarketDay()),
+    insiderFor(symbol).catch(() => null),
   ]);
 
   const daily = dailyRes?.candles ?? [];
@@ -192,6 +197,7 @@ export async function collectData(rawSymbol: string, horizon: Horizon): Promise<
     macro,
     exchangeData,
     exchangeMarket,
+    insider,
     errors,
     sources,
   };
