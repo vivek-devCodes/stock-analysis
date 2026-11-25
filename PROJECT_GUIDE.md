@@ -346,3 +346,39 @@ Code: [src/lib/learn/](src/lib/learn/), [paper/regime.ts](src/lib/paper/regime.t
 
 **Telegram setup (free):** in Telegram open **@BotFather** → `/newbot` → copy the token into `TELEGRAM_BOT_TOKEN`. Send your new bot any message, open `https://api.telegram.org/bot<token>/getUpdates`, copy `message.chat.id` into `TELEGRAM_CHAT_ID`. Add both in Vercel → Settings → Environment Variables and redeploy.
 
+
+---
+
+## 14. Self-improvement engine (learns from its own mistakes)
+
+[learn/improve.ts](src/lib/learn/improve.ts) (pure, tested by `npm run test:improve`) and [learn/improve-run.ts](src/lib/learn/improve-run.ts) (nightly job, part of the `learn` step).
+
+| Step | What it does | Guard rails |
+|---|---|---|
+| Post-mortem | Every closed paper trade: result in R after costs, best/worst excursion, and the cause of a loss (stopped within 30 min, against NIFTY's direction, stop too tight, gave back a winner, no follow-through) | Uses the trade's own 5-minute candles (Yahoo keeps ~60 days) |
+| Setup ledger | Trades grouped by plan/live × long/short × score band. Losing with confidence → **blocked** (still run as shadow trades); unproven → half size; proven profitable → full size | Judged after 15 trades; confidence = mean ± 1 standard error |
+| Exit tuning | Replays the trades with other stop widths, targets and break-even rules | Adopted only if ≥ 0.05R better on the older ⅔ **and** not worse on the newest ⅓ |
+| Entry rules | 30-minute opening range if early stop-outs dominate; NIFTY-direction filter if counter-trend trades lose; minimum score if low scores lose | Each rule needs a minimum sample and switches back when the evidence changes |
+| Defensive mode | If the last 20 recommended trades lose with confidence, only proven setups trade, at half size | Lifts automatically |
+
+Both entry paths (the overnight plan at the open, and the live intraday scan) go through the same gate. Each trade records what was changed (`learnNote`) and its break-even rule. The Scorecard page shows the rules in force, last night's changes, the lessons, the setup ledger and a trade journal. The morning email has a "What the engine learned" section. `ADAPTIVE_WEIGHTS=off` switches all of it off.
+
+---
+
+## 15. Chart pro tools and level-aware agents
+
+[levels.ts](src/lib/levels.ts) (tested by `npm run test:levels`) computes the levels a chart trader draws by hand. The chart and the agents share it:
+
+- **Auto S/R zones**: clustered swing highs and lows, with touch counts
+- **Auto trendlines**: rising support and falling resistance through swing points
+- **Auto Fibonacci**: retracement and extensions of the latest swing
+- **Pivots**: floor pivots plus previous-day high, low and close
+- **VWAP ± σ bands** and **volume profile** (POC and value area)
+- **Fair-value gaps**
+- **Markers**: market structure (BOS / CHoCH) and candlestick patterns (engulfing, hammer, shooting star, morning/evening star)
+
+**Drawing tools** on the analyzer chart: horizontal line, trendline and Fibonacci retracement, saved per stock in the browser. Undo and Clear are in the toolbar.
+
+**Agents:**
+- **Technical agent.** Adds structure, zones, trendlines, the Fibonacci level, POC, the candle pattern and pivots to its findings. Its score moves −20…+15 by level context, for example a long right under resistance is penalised.
+- **Risk agent.** Puts the stop just beyond the nearest support or resistance zone, if that stays within 0.6–1.6× the original distance. It pulls target 1 in before the next opposing zone, so reward-to-risk reflects the real room to move.

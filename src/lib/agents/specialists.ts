@@ -8,6 +8,7 @@ import type { Candle } from "../types";
 import type { DataSnapshot } from "./data";
 import { THRESHOLDS as T } from "./thresholds";
 import type { AgentResult, Bias, Finding, NewsItemRef } from "./types";
+import { dailyLevels, levelAssessment, levelContext } from "../levels";
 
 /**
  * The specialist agents (spec §3, agents 2–8). Each is a deterministic function of the data
@@ -141,7 +142,13 @@ export function technicalAgent(d: DataSnapshot): AgentResult {
   const dailyTrend = regimeOf(price, ind.sma50, ind.sma200);
   const aligned =
     (p.bias === "bullish" && weeklyTrend === "up" && dailyTrend === "bullish") || (p.bias === "bearish" && weeklyTrend === "down" && dailyTrend === "bearish");
-  const score = clamp(Math.round(50 + p.score / 2));
+  // Chart-level toolkit (src/lib/levels.ts): S/R zones, structure, trendlines, Fibonacci, volume
+  // profile, candlestick patterns and floor pivots — the levels a chart trader would draw.
+  const lv = levelContext(d.daily.slice(-250));
+  const piv = dailyLevels(d.daily.slice(-5));
+  const la = lv && p.bias !== "neutral" ? levelAssessment(lv, p.bias === "bullish" ? "long" : "short") : null;
+  const dirSign = p.bias === "bullish" ? 1 : p.bias === "bearish" ? -1 : 0;
+  const score = clamp(Math.round(50 + p.score / 2 + dirSign * (la?.scoreAdj ?? 0)));
   const bias: Bias = p.bias;
 
   const findings: Finding[] = [
@@ -154,8 +161,19 @@ export function technicalAgent(d: DataSnapshot): AgentResult {
     { label: "vs EMA 20 / 50 / 200", value: [ema.e20, ema.e50, ema.e200].map((e) => (e == null ? "—" : price >= e ? "above" : "below")).join(" / ") },
     ...p.metrics.map((m) => ({ label: m.label, value: m.value, tone: m.tone })),
   ];
-  if (d.insight?.support[0]) findings.push({ label: "Support", value: num(d.insight.support[0]) });
-  if (d.insight?.resistance[0]) findings.push({ label: "Resistance", value: num(d.insight.resistance[0]) });
+  if (lv) {
+    findings.push({ label: "Structure", value: `${lv.structure}${lv.lastEvent ? ` (${lv.lastEvent})` : ""}`, tone: lv.structure === "bullish" ? "up" : lv.structure === "bearish" ? "down" : undefined });
+    if (lv.support) findings.push({ label: "Support zone", value: `${num(lv.support.low)}–${num(lv.support.high)} · ${lv.support.touches}×` });
+    if (lv.resistance) findings.push({ label: "Resistance zone", value: `${num(lv.resistance.low)}–${num(lv.resistance.high)} · ${lv.resistance.touches}×` });
+    for (const t of lv.trendlines) findings.push({ label: t.kind === "support" ? "Rising trendline" : "Falling trendline", value: `${num(t.valueNow)}${t.broken ? " (broken)" : ""}` });
+    if (lv.atFib) findings.push({ label: "Fibonacci", value: `at ${lv.atFib}` });
+    if (lv.poc != null) findings.push({ label: "Volume POC", value: num(lv.poc) });
+    if (lv.pattern) findings.push({ label: "Candle pattern", value: lv.pattern.name, tone: lv.pattern.side === "buy" ? "up" : lv.pattern.side === "sell" ? "down" : undefined });
+  } else {
+    if (d.insight?.support[0]) findings.push({ label: "Support", value: num(d.insight.support[0]) });
+    if (d.insight?.resistance[0]) findings.push({ label: "Resistance", value: num(d.insight.resistance[0]) });
+  }
+  if (piv) findings.push({ label: "Pivot / PDH / PDL", value: `${num(piv.pivots.p)} / ${num(piv.pdh)} / ${num(piv.pdl)}` });
 
   return {
     agent: "technical",
@@ -164,10 +182,10 @@ export function technicalAgent(d: DataSnapshot): AgentResult {
     bias,
     summary: `${p.action === "WAIT" ? "No clear setup" : `${p.action} setup`} on the ${d.horizon} timeframe (engine score ${p.score > 0 ? "+" : ""}${p.score}). Daily trend ${dailyTrend}, weekly ${weeklyTrend}${aligned ? " — timeframes aligned" : ""}.`,
     findings,
-    evidence: [...p.reasons, ...(d.insight && d.horizon !== "intraday" ? d.insight.working.slice(0, 1) : [])],
+    evidence: [...p.reasons, ...(la?.reasons ?? []), ...(d.insight && d.horizon !== "intraday" ? d.insight.working.slice(0, 1) : [])],
     warnings: [
       ...(aligned || p.bias === "neutral" ? [] : ["Timeframes are not aligned (daily vs weekly vs setup)."]),
-      "Not yet computed: Supertrend, Ichimoku, OBV, MFI, CMF, candlestick/chart patterns. (Delivery % is scored by the Ownership & Flows agent.)",
+      ...(la && la.scoreAdj <= -8 ? [`Levels argue against this ${p.bias === "bullish" ? "long" : "short"} (${la.scoreAdj} points).`] : []),
     ],
     sources: [],
   };

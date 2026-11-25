@@ -2,7 +2,7 @@
 
 import { ChevronDown, FlaskConical, LineChart, Signal } from "lucide-react";
 import { useState } from "react";
-import { SIGNAL_COLORS, SIGNALS, STUDIES, type SignalId, type StudyId } from "@/lib/chart-config";
+import { SIGNAL_COLORS, SIGNALS, STUDIES, STUDY_GROUPS, type SignalId, type StudyId } from "@/lib/chart-config";
 import { clsx } from "@/lib/format";
 
 const pct = (x: number | undefined | null, d = 0) => (x == null ? "—" : `${(x * 100).toFixed(d)}%`);
@@ -38,7 +38,7 @@ export function ChartControls({
         <div className="grid gap-3 rounded-xl border border-line bg-[#0b1016] p-3 text-xs md:grid-cols-2">
           <div>
             <p className="mb-1.5 font-semibold uppercase tracking-wider text-muted">Indicators</p>
-            {(["Trend", "Volatility", "Levels"] as const).map((g) => (
+            {STUDY_GROUPS.map((g) => (
               <div key={g} className="mb-2">
                 <p className="mb-1 text-[10px] text-muted">{g}</p>
                 <div className="flex flex-wrap gap-1.5">
