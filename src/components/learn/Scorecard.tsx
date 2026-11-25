@@ -7,6 +7,7 @@ import type { Scorecard as Card$ } from "@/lib/learn/scorecard";
 import { AGENT_LABELS, type AgentId } from "@/lib/agents/types";
 import { clsx } from "@/lib/format";
 import { Card, PageHeader } from "../shell/PageHeader";
+import { SelfImprovement } from "./SelfImprovement";
 
 type Payload = Card$ & { health: Health | null };
 
@@ -178,6 +179,9 @@ export function Scorecard() {
               </button>
             </Card>
           </div>
+
+          {/* Self-improvement engine */}
+          <SelfImprovement state={d.improve} />
 
           {/* Self-review */}
           <Card title="Self-review — what the evidence says">

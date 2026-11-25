@@ -25,6 +25,7 @@ import {
 } from "./core";
 import { resetLearnedCache } from "./learned";
 import { exchangeDates, getLearned, listBaselineDays, listSignalDays, marketOn, openCloseOn, saveBaselineDay, saveSignalDay, scoredSignalDays, setLearned, stocksOn } from "./store";
+import type { ImproveState } from "./improve";
 
 const L = THRESHOLDS.learn;
 const MAX_REBUILDS_PER_RUN = 12;
@@ -116,13 +117,14 @@ export async function runLearning(): Promise<{ signalDays: string[]; baselineDay
 export type Scorecard = Awaited<ReturnType<typeof getScorecard>>;
 
 export async function getScorecard() {
-  const [signalRows, baselines, trades, guard, learnedSignals, learnedWeights] = await Promise.all([
+  const [signalRows, baselines, trades, guard, learnedSignals, learnedWeights, improve] = await Promise.all([
     listSignalDays(),
     listBaselineDays(250),
     listTrades(5000),
     currentGuard().catch(() => null),
     getLearned<Record<string, number>>("signals").catch(() => null),
     getLearned<AdaptedWeights>("weights:intraday").catch(() => null),
+    getLearned<ImproveState>("improve").catch(() => null),
   ]);
   const signals: SignalStat[] = summariseSignals(signalRows);
   const accuracy = agentAccuracy(trades);
@@ -143,6 +145,7 @@ export async function getScorecard() {
     performance: { recommended: groupStats(rec), shadow: groupStats(trades.filter((t) => t.kind === "shadow")), riskDemoted: groupStats(trades.filter((t) => t.riskNote)) },
     guard,
     suggestions: suggestions({ signals, calibration, baselines: baselineSummary, accuracy }),
-    thresholds: { learn: THRESHOLDS.learn, guard: THRESHOLDS.guard, regime: THRESHOLDS.regime },
+    improve: improve?.data ?? null,
+    thresholds: { learn: THRESHOLDS.learn, guard: THRESHOLDS.guard, regime: THRESHOLDS.regime, improve: THRESHOLDS.improve },
   };
 }

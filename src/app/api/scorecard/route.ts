@@ -1,6 +1,7 @@
 import type { NextRequest } from "next/server";
 import { requireRole } from "@/lib/auth/guard";
 import { runHealthCheck } from "@/lib/learn/health";
+import { runImprovement } from "@/lib/learn/improve-run";
 import { getScorecard, runLearning } from "@/lib/learn/scorecard";
 import { getLearned } from "@/lib/learn/store";
 import { DRAWDOWN_RESET_FLAG } from "@/lib/paper/guard";
@@ -34,7 +35,11 @@ export async function POST(request: NextRequest) {
       await setFlag(DRAWDOWN_RESET_FLAG, { by: auth.username });
       return Response.json({ ok: true });
     }
-    if (action === "learn") return Response.json(await runLearning());
+    if (action === "learn") {
+      const learning = await runLearning();
+      const improve = await runImprovement();
+      return Response.json({ ...learning, improve });
+    }
     if (action === "health") return Response.json(await runHealthCheck({ alert: false }));
     return Response.json({ error: "action must be resume, learn or health" }, { status: 400 });
   } catch (error) {

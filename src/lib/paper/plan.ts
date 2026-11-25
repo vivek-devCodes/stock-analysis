@@ -18,6 +18,9 @@ import { istDate, istTimeOn, marketPhase, orbEntry, PAPER_SETTINGS, SESSION } fr
 import { activePlanFor, finishPlan, getPlan, planExecutedOn, savePlan } from "./plan-store";
 import { insertTrade } from "./store";
 import type { PaperKind, PaperTrade, PlanExecution, PlanItem, SessionPlan } from "./types";
+import { applyTuning, DEFAULT_TUNING, gateTrade } from "../learn/improve";
+import { currentImprovement, marketAgrees } from "../learn/improve-run";
+import { learnedNote } from "./learned-note";
 
 /**
  * The agent's day:
@@ -173,11 +176,13 @@ export async function executePendingPlan(): Promise<PlanExecution | null> {
   const todo = plan.items.filter((i) => !(prev.get(i.symbol)?.final ?? false));
   const sessionOpen = istTimeOn(now, SESSION.open);
   const pastDeadline = now >= istTimeOn(now, P.orbDeadline);
-  const [guard, quotes, market] = await Promise.all([
+  const [guard, quotes, market, learned] = await Promise.all([
     currentGuard(),
     todo.length ? getLiveQuotes(todo.map((i) => i.symbol)).catch(() => []) : Promise.resolve([]),
     getMarketDay().catch(() => null),
+    currentImprovement(),
   ]);
+  const tuning = learned?.tuning ?? DEFAULT_TUNING;
   const exch = market && todo.length ? await getStockDays(todo.map((i) => base(i.symbol)), market.tradeDate).catch(() => new Map()) : new Map();
 
   for (const item of todo) {
@@ -193,7 +198,7 @@ export async function executePendingPlan(): Promise<PlanExecution | null> {
       maxChase: P.maxChasePct,
       candles,
       sessionOpen,
-      orbMinutes: P.orbMinutes,
+      orbMinutes: tuning.orbMinutes,
       quote: q && q.time >= sessionOpen ? { price: q.price, time: q.time } : null,
     });
     if (d.action !== "enter") {
@@ -204,11 +209,18 @@ export async function executePendingPlan(): Promise<PlanExecution | null> {
     }
     let kind = item.kind;
     let riskNote: string | null = null;
+    // Self-improvement: learned exits, setup gate (blocked setups become shadow) and market direction.
+    const exits = applyTuning(item.side, d.price, item.stop, item.target, tuning);
+    const gate = gateTrade(learned, { origin: "plan", side: item.side, score: item.score });
     if (kind === "recommended") {
       riskNote = admit(guard, { symbol: item.symbol, side: item.side });
+      if (!riskNote && !gate.allow) riskNote = gate.note;
+      if (!riskNote && tuning.marketAlign && (await marketAgrees(item.side, d.at)) === false) riskNote = "Against NIFTY's direction since the open (learned market-direction filter)";
       if (riskNote) kind = "shadow";
     }
-    const qty = positionSize(d.price, item.stop, PAPER_SETTINGS.capital, PAPER_SETTINGS.riskPct, { mult: guard.sizeMult > 0 ? guard.sizeMult : 1, atrPct: atrPctOf(exch.get(base(item.symbol))) });
+    const learnMult = kind === "recommended" ? gate.sizeMult : 1;
+    const learnNote = learnedNote(tuning, learnMult, gate);
+    const qty = positionSize(d.price, exits.stop, PAPER_SETTINGS.capital, PAPER_SETTINGS.riskPct, { mult: (guard.sizeMult > 0 ? guard.sizeMult : 1) * learnMult, atrPct: atrPctOf(exch.get(base(item.symbol))) });
     if (qty < 1) {
       prev.set(item.symbol, { symbol: item.symbol, entered: false, reason: "Position size below one share", price: d.price, tradeId: null, final: true, range: d.range });
       continue;
@@ -229,18 +241,21 @@ export async function executePendingPlan(): Promise<PlanExecution | null> {
       validation: item.validation,
       score: item.score,
       entry: d.price,
-      target: item.target,
-      stop: item.stop,
+      target: exits.target,
+      stop: exits.stop,
       qty,
-      riskReward: Math.abs(item.target - d.price) / Math.abs(d.price - item.stop),
+      riskReward: Math.abs(exits.target - d.price) / Math.abs(d.price - exits.stop),
       reasons: [
         ...item.reasons,
         `Planned after the ${plan.madeOn} close; entered on the opening-range ${item.side === "long" ? "breakout above" : "breakdown below"} ${edge.toFixed(2)} at ${at.toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit" })} IST.`,
         ...(riskNote ? [`Risk rule — ${riskNote}`] : []),
+        ...(learnNote ? [`Learned — ${learnNote}`] : []),
       ],
       votes: item.votes,
       reportId: item.reportId,
       riskNote,
+      breakEvenR: tuning.breakEvenR,
+      learnNote,
       status: "open",
       exitPrice: null,
       exitAt: null,

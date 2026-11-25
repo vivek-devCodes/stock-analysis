@@ -120,6 +120,24 @@ export const THRESHOLDS = {
     liquidCr: 10, // signals are scored on stocks trading ≥ ₹10 crore a day
     baselinePicks: 5, // baselines: 5 stocks each
   },
+  improve: {
+    // Self-improvement engine (src/lib/learn/improve.ts): learns from every closed paper trade.
+    minSetupTrades: 15, // a setup (plan/live × side × score band) is judged after 15 closed trades
+    unprovenSize: 0.5, // setups without proven profit trade at half size
+    recentWindow: 20, // defensive mode looks at the last 20 recommended trades
+    minTuneTrain: 20, // exit tuning needs 20 older trades to choose …
+    minTuneTest: 10, // … and 10 newer trades to confirm (out-of-sample)
+    minGainR: 0.05, // a new exit rule must add ≥ 0.05R per trade
+    minLossesForRule: 10, // entry-timing rules need 10 losing trades
+    earlyStopShare: 0.45, // ≥ 45% of losses stopped within 30 min → wait for a 30-minute opening range
+    minAlignTrades: 8, // market-direction filter needs 8 trades each way
+    alignGapR: 0.25, // … and trades with the market must beat trades against it by ≥ 0.25R
+    grid: {
+      stopScale: [0.75, 1, 1.25, 1.5],
+      targetR: [null, 1, 1.5, 2, 2.5],
+      breakEvenR: [0, 0.75, 1, 1.5],
+    },
+  },
 } as const;
 
 /** Plain-English rule list for the UI and the digest email. */
@@ -179,6 +197,16 @@ export function describeRules(): Array<{ group: string; rules: string[] }> {
         `After ${t.learn.minSignalObs} observations a signal right less than ${t.learn.muteBelow * 100}% of the time is muted in plan ranking; better ones get up to ${t.learn.weightCeil}× weight.`,
         `After ${t.learn.minTradesToAdapt} closed paper trades, each agent with ≥ ${t.learn.minAgentCalls} calls has its score weight scaled ${t.learn.weightFloor}–${t.learn.weightCeil}× by its hit rate (set ADAPTIVE_WEIGHTS=off to disable).`,
         `The agent's plan is compared daily with yesterday's top ${t.learn.baselinePicks} gainers and ${t.learn.baselinePicks} random picks from the same screen, all open → close after costs.`,
+      ],
+    },
+    {
+      group: "Self-improvement (learns from mistakes)",
+      rules: [
+        "Every closed paper trade gets a post-mortem: result in R after costs, and the cause of a loss (stopped early, against the market, stop too tight, gave back a winner, no follow-through).",
+        `Setups (plan/live × long/short × score band) are judged after ${t.improve.minSetupTrades} trades: losing with confidence → blocked (kept as shadow trades so they can earn their way back); unproven → ${t.improve.unprovenSize}× size; proven profitable → full size.`,
+        `Stops, targets and the break-even move are re-tested nightly on the trades' own 5-minute candles. A change is adopted only if it adds ≥ ${t.improve.minGainR}R per trade on ${t.improve.minTuneTrain}+ older trades and is not worse on the ${t.improve.minTuneTest}+ newest (out-of-sample).`,
+        `If ≥ ${t.improve.earlyStopShare * 100}% of losses are stopped within 30 minutes, planned trades wait for a 30-minute opening range; if trades against NIFTY's direction do ${t.improve.alignGapR}R worse, entries must agree with the market's move.`,
+        `Low score bands that lose with confidence raise the minimum score; if the last ${t.improve.recentWindow} recommended trades lose with confidence, only proven setups trade (defensive mode).`,
       ],
     },
     {

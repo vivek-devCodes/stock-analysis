@@ -8,6 +8,8 @@ import { istDate } from "../paper/rules";
 import { claimOnce, listTrades } from "../paper/store";
 import { fetchChart } from "../yahoo";
 import { setLearned } from "./store";
+import { testEmailConnection } from "../email-service";
+import { morningReportStatus } from "../reports/morning-run";
 
 /**
  * Nightly health check: did every automatic job run today? A failure is otherwise silent (a cron
@@ -61,7 +63,10 @@ export async function runHealthCheck(opts: { alert: boolean }): Promise<Health> 
       checks.push({ name: "Agent scans", status: ran ? "ok" : "warn", detail: ran ? "Ran today." : "No agent scan recorded today (Vercel cron or GitHub Actions)." });
     }
   }
-  checks.push({ name: "Email", status: process.env.SMTP_USER && process.env.SMTP_PASS && process.env.REPORT_RECIPIENTS ? "ok" : "warn", detail: process.env.SMTP_USER && process.env.SMTP_PASS && process.env.REPORT_RECIPIENTS ? "SMTP configured." : "SMTP_USER / SMTP_PASS / REPORT_RECIPIENTS not all set — no emails." });
+  const smtp = await testEmailConnection().catch((e) => ({ ok: false, error: e instanceof Error ? e.message : String(e), warning: undefined }));
+  checks.push(smtp.ok ? { name: "Email", status: smtp.warning ? "warn" : "ok", detail: smtp.warning ?? "Gmail login verified." } : { name: "Email", status: "fail", detail: `Emails cannot be sent: ${smtp.error}` });
+  const morning = (await morningReportStatus(3).catch(() => [])).find((r) => r.day === day);
+  if (tradingDay) checks.push(morning ? { name: "Morning report", status: morning.status === "sent" ? "ok" : "fail", detail: morning.status === "sent" ? "Sent this morning." : `Not delivered: ${morning.status}` } : { name: "Morning report", status: "fail", detail: "No morning report attempt today — the 08:10 IST GitHub trigger needs the APEX_APP_URL / APEX_CRON_SECRET secrets; Vercel's backup runs between 08:30 and 09:29 IST." });
   checks.push({ name: "Telegram", status: telegramConfigured() ? "ok" : "warn", detail: telegramConfigured() ? "Configured." : "TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID not set — no phone alerts (optional)." });
 
   const problems = checks.filter((c) => c.status === "fail" || (c.status === "warn" && !["Email", "Telegram"].includes(c.name)));

@@ -44,6 +44,10 @@ export type PaperTrade = {
   reportId: string | null;
   /** Set when the agent recommended the trade but a risk rule demoted it to shadow. */
   riskNote?: string | null;
+  /** Break-even rule this trade was opened with (learned; older trades use the default). */
+  breakEvenR?: number | null;
+  /** What the self-improvement engine changed for this trade (size, stop/target), if anything. */
+  learnNote?: string | null;
   status: PaperStatus;
   exitPrice: number | null;
   exitAt: string | null;

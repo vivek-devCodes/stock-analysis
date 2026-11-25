@@ -2,6 +2,7 @@ import type { NextRequest } from "next/server";
 import { safeEqual } from "@/lib/auth/password";
 import { getMarketDay, missingFiles, refreshExchangeData } from "@/lib/exchange/store";
 import { runHealthCheck } from "@/lib/learn/health";
+import { runImprovement } from "@/lib/learn/improve-run";
 import { runLearning } from "@/lib/learn/scorecard";
 import { sendWeeklyScorecard } from "@/lib/learn/weekly";
 import { buildNextSessionPlan } from "@/lib/paper/plan";
@@ -14,7 +15,8 @@ import { runPortfolio } from "@/lib/portfolio/engine";
  * Mon–Fri. Steps, in order:
  *   1. exchange  — download today's NSE/BSE files (bhavcopy, F&O, deals, surveillance…)
  *   2. report    — score today's paper trades and email the daily report (closes out the plan)
- *   3. learn     — score NSE signals against the next session, agent vs baselines, adapt weights
+ *   3. learn     — score NSE signals, agent vs baselines, adapt weights, and the self-improvement
+ *                  post-mortem (setup ledger, learned exits and entry filters)
  *   4. plan      — build tomorrow's intraday plan with the full multi-agent analysis
  *   5. portfolio — momentum + quality portfolio: monthly rebalance, nightly value vs NIFTY
  *   6. weekly    — the weekly scorecard email (Fridays)
@@ -73,7 +75,9 @@ export async function GET(request: NextRequest) {
 
   await attempt("learn", async () => {
     const r = await runLearning();
-    return { signalDaysScored: r.signalDays, baselineDays: r.baselineDays, weightsAdapted: r.weights.adapted, notes: r.weights.notes, muted: r.muted };
+    // Self-improvement: post-mortem every closed trade, re-test exits, update the setup ledger.
+    const imp = await runImprovement().catch((e) => ({ error: e instanceof Error ? e.message : String(e) }));
+    return { signalDaysScored: r.signalDays, baselineDays: r.baselineDays, weightsAdapted: r.weights.adapted, notes: r.weights.notes, muted: r.muted, improve: imp };
   });
 
   await attempt("plan", async () => {
