@@ -87,7 +87,7 @@ function StatusCell({ t }: { t: PaperTradeView }) {
       </span>
     );
   }
-  const label = t.status === "target" ? "Target hit" : t.status === "stop" ? "Stop-loss hit" : "Squared off";
+  const label = t.status === "target" ? "Target hit" : t.status === "stop" ? "Stop-loss hit" : t.status === "breakeven" ? "Stopped at entry" : "Squared off";
   return <span className="text-[11px] font-medium text-foreground/85">{label}</span>;
 }
 
@@ -296,10 +296,11 @@ export function PaperTrading() {
             {lastRun.plan && (
               <p>
                 <span className="font-semibold">Last night&apos;s plan first:</span>{" "}
-                {lastRun.plan.rows.map((r) => `${short(r.symbol)} ${r.entered ? "entered" : `skipped (${r.reason})`}`).join(" · ") || "no ideas"}
+                {lastRun.plan.rows.map((r) => `${short(r.symbol)} ${r.entered ? "entered" : r.final === false ? `waiting (${r.reason})` : `skipped (${r.reason})`}`).join(" · ") || "no ideas"}
               </p>
             )}
             {lastRun.skipped && <p className="text-muted">{lastRun.skipped}</p>}
+            {lastRun.risk && lastRun.risk.length > 0 && <p className="text-warn">Risk rules: {lastRun.risk.join(" · ")}</p>}
             {lastRun.shortlisted.length > 0 && (
               <p>
                 Shortlisted {lastRun.shortlisted.map(short).join(", ")} · analysed {lastRun.analysed} ·{" "}
@@ -308,7 +309,7 @@ export function PaperTrading() {
             )}
             {lastRun.opened.map((x) => (
               <p key={x.symbol}>
-                • {x.side === "long" ? "BUY" : "SELL"} {short(x.symbol)} — {x.kind === "shadow" ? "agent said NO TRADE (tracked as shadow)" : x.decision}
+                • {x.side === "long" ? "BUY" : "SELL"} {short(x.symbol)} — {x.kind === "shadow" ? "tracked as shadow (agent said NO TRADE, or a risk rule blocked it)" : x.decision}
               </p>
             ))}
             {lastRun.notTraded.map((x) => (

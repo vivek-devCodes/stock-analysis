@@ -1,6 +1,8 @@
 import "server-only";
 import { sendHtmlEmail } from "../email-service";
+import { notify } from "../notify";
 import { settleOpenTrades } from "./engine";
+import { closeOutPlan } from "./plan";
 import { claimReportEmail, listDailyReports, markReportEmail, planExecutedOn, saveDailyReport } from "./plan-store";
 import { listTrades } from "./store";
 import type { DailyReport, PaperTrade, ReportGroup, ReportRow } from "./types";
@@ -23,7 +25,7 @@ export function group(trades: PaperTrade[]): ReportGroup {
     winRate: closed.length ? wins / closed.length : null,
     netPnl: closed.reduce((a, t) => a + t.netPnl!, 0),
     targetHits: closed.filter((t) => t.status === "target").length,
-    stopHits: closed.filter((t) => t.status === "stop").length,
+    stopHits: closed.filter((t) => t.status === "stop" || t.status === "breakeven").length,
     squareOffs: closed.filter((t) => t.status === "square-off").length,
   };
 }
@@ -44,6 +46,7 @@ export function headlineFor(r: Omit<DailyReport, "headline" | "createdAt" | "ema
 
 export async function buildDailyReport(day: string, email = true): Promise<DailyReport | null> {
   await settleOpenTrades(true).catch(() => undefined);
+  await closeOutPlan(day).catch(() => undefined);
   const trades = (await listTrades(3000)).filter((t) => t.tradeDay === day);
   const plan = await planExecutedOn(day);
   if (!trades.length && !plan) return null;
@@ -83,6 +86,8 @@ export async function buildDailyReport(day: string, email = true): Promise<Daily
   if (email && !stillOpen && (await claimReportEmail(day))) {
     const res = await sendHtmlEmail(`[Paper trading] ${day} — ${inr(core.recommended.netPnl)} (${core.recommended.wins}/${core.recommended.closed} right)`, html(report), text(report));
     await markReportEmail(day, res.success ? "sent" : `failed: ${res.error}`);
+    void notify.text(`📊 <b>Paper trading ${day}</b>
+${report.headline}`).catch(() => undefined);
     report.emailed = res.success ? "sent" : `failed: ${res.error}`;
   }
   return report;

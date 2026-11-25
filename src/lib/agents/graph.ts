@@ -3,6 +3,7 @@ import { Annotation, END, START, StateGraph } from "@langchain/langgraph";
 import { claimAlert, markAlert, saveReport, type AlertKind } from "../db/repo";
 import { sendSignalEmail } from "../email-service";
 import { collectData, normaliseSymbol, validateData, type DataSnapshot } from "./data";
+import { adaptedWeightsFor } from "../learn/learned";
 import { detectConflicts, expectedValue, finalDecision, headlineFor, proposedDirection, riskAgent, scenarios, scoreAll, validate } from "./decision";
 import { templateNarrative } from "./llm";
 import { CALIBRATION_META, fnoAgent, fundamentalAgent, marketAgent, newsAgent, ownershipAgent, quantAgent, technicalAgent } from "./specialists";
@@ -90,7 +91,8 @@ async function conflictsNode(s: S): Promise<Partial<S>> {
   const start = t0();
   const dir = proposedDirection(s.request.horizon, s.agents.find((a) => a.agent === "technical"), s.agents.find((a) => a.agent === "fundamental"));
   const conflicts = detectConflicts(s.agents, s.request.horizon);
-  const score = scoreAll(s.agents, s.request.horizon, dir);
+  const adapted = await adaptedWeightsFor(s.request.horizon).catch(() => null);
+  const score = scoreAll(s.agents, s.request.horizon, dir, adapted);
   return {
     conflicts,
     score,

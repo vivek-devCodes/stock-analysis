@@ -16,7 +16,8 @@
     "test:studies": "tsx --tsconfig tsconfig.scripts.json src/scripts/test-studies.ts",
     "backtest:signals": "tsx --tsconfig tsconfig.scripts.json src/scripts/backtest-signals.ts",
     "test:paper": "tsx --tsconfig tsconfig.scripts.json src/scripts/test-paper.ts",
-    "test:exchange": "tsx --tsconfig tsconfig.scripts.json src/scripts/test-exchange.ts"
+    "test:exchange": "tsx --tsconfig tsconfig.scripts.json src/scripts/test-exchange.ts",
+    "test:learn": "tsx --tsconfig tsconfig.scripts.json src/scripts/test-learn.ts"
   },
   "dependencies": {
     "@langchain/core": "1.3.2",

@@ -75,20 +75,32 @@ export type ReplayResult = { status: Exclude<PaperStatus, "open">; exitPrice: nu
  *  - A candle that opens beyond the stop exits at its open (a gap — worse than the stop).
  *  - If one candle touches both the stop and the target, the stop is assumed first (conservative).
  *  - A target fills at the target price (no credit for favourable gaps).
+ *  - Once a candle closes the trade `breakEvenR` × risk in profit, the stop moves to the entry for
+ *    the following candles (exit at entry = "breakeven"). Pass 0 to disable.
  *  - Not resolved by 15:15 IST → squared off at the close of the last candle before 15:15.
  *
  * Returns null while the trade is still live (before square-off, or candles not yet available).
  */
-export function replayTrade(t: ReplayInput, candles: Candle[], nowSeconds: number, barSeconds = 300): ReplayResult | null {
+export function replayTrade(t: ReplayInput, candles: Candle[], nowSeconds: number, barSeconds = 300, breakEvenR: number = THRESHOLDS.guard.breakEvenR): ReplayResult | null {
   const cutoff = istTimeOn(t.openedAt, SESSION.squareOff);
   const long = t.side === "long";
   const sorted = [...candles].sort((a, b) => a.time - b.time);
   const bars = sorted.filter((c) => c.time >= t.openedAt && c.time < cutoff);
+  const risk = Math.abs(t.entry - t.stop);
+  const trigger = breakEvenR > 0 && risk > 0 ? (long ? t.entry + breakEvenR * risk : t.entry - breakEvenR * risk) : null;
+  let stop = t.stop;
+  let moved = false;
 
   for (const c of bars) {
-    if (long ? c.open <= t.stop : c.open >= t.stop) return { status: "stop", exitPrice: c.open, exitAt: c.time };
-    if (long ? c.low <= t.stop : c.high >= t.stop) return { status: "stop", exitPrice: t.stop, exitAt: c.time + barSeconds };
+    const status = moved ? "breakeven" : "stop";
+    if (long ? c.open <= stop : c.open >= stop) return { status, exitPrice: c.open, exitAt: c.time };
+    if (long ? c.low <= stop : c.high >= stop) return { status, exitPrice: stop, exitAt: c.time + barSeconds };
     if (long ? c.high >= t.target : c.low <= t.target) return { status: "target", exitPrice: t.target, exitAt: c.time + barSeconds };
+    // Move the stop only after the candle has CLOSED past the trigger (no intrabar look-ahead).
+    if (!moved && trigger != null && (long ? c.close >= trigger : c.close <= trigger)) {
+      stop = t.entry;
+      moved = true;
+    }
   }
 
   // Square-off once the session is past the cut-off and the data has caught up (Yahoo's NSE
@@ -131,4 +143,55 @@ export function sizeFor(entry: number, stop: number, capital: number, riskPct: n
   const dist = Math.abs(entry - stop);
   if (!(dist > 0) || !(entry > 0)) return 0;
   return Math.max(0, Math.min(Math.floor((capital * riskPct) / 100 / dist), Math.floor(capital / entry)));
+}
+
+export type OrbDecision =
+  | { action: "enter"; price: number; at: number; range: { high: number; low: number } }
+  | { action: "wait"; reason: string; range: { high: number; low: number } | null }
+  | { action: "skip"; reason: string; range: { high: number; low: number } | null };
+
+/**
+ * Opening-range breakout entry for a planned trade. The range is the first `orbMinutes` of the
+ * session; a long enters when price trades above the range high (a short below the low), like a
+ * stop-entry order. Fill = the range edge, or the candle's open if it gapped beyond it; the trade
+ * is stamped at the END of that candle so settlement never replays bars before the fill.
+ * If the stop is touched before any breakout, the setup is void. Pure; tested.
+ */
+export function orbEntry(input: {
+  side: PaperSide;
+  ref: number;
+  stop: number;
+  target: number;
+  maxChase: number;
+  candles: Candle[];
+  sessionOpen: number;
+  orbMinutes: number;
+  quote: { price: number; time: number } | null;
+  barSeconds?: number;
+}): OrbDecision {
+  const bar = input.barSeconds ?? 300;
+  const long = input.side === "long";
+  const orEnd = input.sessionOpen + input.orbMinutes * MIN;
+  const today = [...input.candles].filter((c) => c.time >= input.sessionOpen).sort((a, b) => a.time - b.time);
+  const orBars = today.filter((c) => c.time < orEnd);
+  const complete = today.some((c) => c.time >= orEnd - bar);
+  if (!orBars.length || !complete) return { action: "wait", reason: "Opening range still forming (candles not yet available)", range: null };
+  const range = { high: Math.max(...orBars.map((c) => c.high)), low: Math.min(...orBars.map((c) => c.low)) };
+  if (long ? range.low <= input.stop : range.high >= input.stop) return { action: "skip", reason: `Hit the stop (${input.stop.toFixed(2)}) inside the opening range — setup void`, range };
+
+  const decide = (price: number, at: number): OrbDecision => {
+    const check = planEntry(input.side, input.ref, input.stop, input.target, price, input.maxChase);
+    return check.ok ? { action: "enter", price, at, range } : { action: "skip", reason: check.reason, range };
+  };
+  for (const c of today.filter((x) => x.time >= orEnd)) {
+    if (long ? c.low <= input.stop : c.high >= input.stop) return { action: "skip", reason: "Hit the stop before breaking out of the opening range", range };
+    if (long ? c.high > range.high : c.low < range.low) {
+      const fill = long ? Math.max(range.high, c.open) : Math.min(range.low, c.open);
+      return decide(fill, c.time + bar);
+    }
+  }
+  // Candles lag; the live quote may already show the breakout.
+  const q = input.quote;
+  if (q && q.time >= orEnd && q.price > 0 && (long ? q.price > range.high : q.price < range.low)) return decide(q.price, q.time);
+  return { action: "wait", reason: `Waiting for a ${long ? "break above" : "break below"} the opening range (${(long ? range.high : range.low).toFixed(2)})`, range };
 }

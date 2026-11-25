@@ -83,6 +83,22 @@ export async function finishPlan(plan: SessionPlan): Promise<void> {
   await db.query(`update paper_plans set status = $2, data = $3::jsonb where made_on = $1`, [plan.madeOn, plan.status, JSON.stringify(plan)]);
 }
 
+/**
+ * The plan to work on at this run: one already executing today (opening-range entries span several
+ * runs until the breakout deadline), otherwise the newest pending plan, claimed now.
+ */
+export async function activePlanFor(today: string, expireBefore: string): Promise<SessionPlan | null> {
+  const db = await getDb();
+  if (!db) {
+    const running = [...memory.plans.values()].find((p) => p.status === "executing" && (p.execution?.day === today || (!p.execution && p.madeOn < today)));
+    if (running) return running;
+  } else {
+    const rows = await db.query<{ data: SessionPlan | string }>(`select data from paper_plans where status = 'executing' and (data->'execution'->>'day' = $1 or (coalesce(data->'execution', 'null'::jsonb) = 'null'::jsonb and made_on < $1)) order by made_on desc limit 1`, [today]);
+    if (rows[0]) return parse(rows[0].data);
+  }
+  return claimPendingPlan(today, expireBefore);
+}
+
 /** The plan that was executed on `day` (entries at that day's open). */
 export async function planExecutedOn(day: string): Promise<SessionPlan | null> {
   const db = await getDb();

@@ -154,12 +154,14 @@ export function interpretMarket(m: MarketDay | null): ExchangeSignal[] {
 }
 
 /** −1…+1 directional score from signals (bullish +, bearish −), weighted by id. */
-export function netDirection(signals: ExchangeSignal[], ids: string[], weights: Record<string, number> = {}): { score: number; used: number } {
+export function netDirection(signals: ExchangeSignal[], ids: string[], weights: Record<string, number> = {}, mult: (s: ExchangeSignal) => number = () => 1): { score: number; used: number } {
   let sum = 0;
   let used = 0;
   for (const s of signals) {
     if (!ids.includes(s.id) || (s.effect !== "bullish" && s.effect !== "bearish")) continue;
-    const w = weights[s.id] ?? 1;
+    // `mult` is the learning loop's verdict on this signal (0 = muted as no better than chance).
+    const w = (weights[s.id] ?? 1) * mult(s);
+    if (w <= 0) continue;
     sum += (s.effect === "bullish" ? 1 : -1) * w;
     used += w;
   }
